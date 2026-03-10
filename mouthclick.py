@@ -375,6 +375,8 @@ import pyautogui
 import tkinter as tk
 from tkinter import ttk
 from collections import deque
+from pynput import keyboard
+import ctypes
 
 # =========================================
 # ==========   MENU GRAFICO GUI   =========
@@ -384,6 +386,7 @@ def show_gui_menu():
     window = tk.Tk()
     window.title("Configuración FaceMouse")
     window.resizable(False, False)
+    zoom_var = tk.BooleanVar(value=False)
 
     # Tamaño automático según contenido (anti cortes)
     window.update_idletasks()
@@ -437,13 +440,28 @@ def show_gui_menu():
     def start():
         window.destroy()
 
+    frame_zoom = tk.LabelFrame(window, text="Zoom automático")
+    frame_zoom.pack(fill="x", padx=20, pady=10)
+
+    tk.Checkbutton(
+        frame_zoom,
+        text="Activar zoom al entrar en modo preciso/lento",
+        variable=zoom_var
+    ).pack(anchor="w", padx=10, pady=5)
+
     tk.Button(window, text="COMENZAR", font=("Arial", 14, "bold"),
               command=start, bg="#4CAF50", fg="white").pack(pady=18)
 
     window.mainloop()
-    return click_mode_var.get(), int(cam_index_var.get()), sensitivity_var.get(), bool(stabilize_var.get())
-
-CLICK_MODE, CAMERA_INDEX, SENS, STABILIZE = show_gui_menu()
+    return (
+    click_mode_var.get(),
+    int(cam_index_var.get()),
+    sensitivity_var.get(),
+    bool(stabilize_var.get()),
+    bool(zoom_var.get())
+    )
+    
+CLICK_MODE, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED = show_gui_menu()
 print("Modo:", CLICK_MODE)
 print("Cam:", CAMERA_INDEX)
 print("Sens:", SENS)
@@ -518,6 +536,21 @@ def clamp_with_margin(v, lo, hi, m=SAFE_MARGIN):
 DWELL_CLICK_SEC = 3.0
 last_move_time = time.time()
 
+ZOOM_TRIGGER_SPEED = 0.20      # activa zoom cuando speed baja de esto
+ZOOM_EXIT_SPEED = 0.80         # se apaga recién cuando speed sube bastante
+zoom_active = False
+
+ZOOM_MIN_ON_SEC = 1.5          # una vez prendido, queda al menos este tiempo
+zoom_on_since = 0.0
+
+DEBUG_CONSOLE = True
+DEBUG_PRINT_EVERY_SEC = 0.30
+last_debug_print = 0.0
+
+RUNNING = True
+PAUSED = False
+
+
 # =========================================
 # ==========  One Euro Filter  ============
 # =========================================
@@ -589,6 +622,81 @@ def do_double_click():
     pyautogui.click(x=x, y=y)
     time.sleep(DBLCLICK_INTERVAL_SEC)
     pyautogui.click(x=x, y=y)
+
+# =========================================
+# ==========   WINDOWS MAGNIFIER ==========
+# =========================================
+
+last_zoom_toggle_time = 0.0
+ZOOM_TOGGLE_COOLDOWN = 0.8   # evita ON/OFF muy rápido
+
+VK_LWIN = 0x5B
+VK_ESCAPE = 0x1B
+VK_ADD_NUMPAD = 0x6B   # tecla + del keypad numérico
+
+KEYEVENTF_KEYUP = 0x0002
+
+def press_vk(vk):
+    ctypes.windll.user32.keybd_event(vk, 0, 0, 0)
+    time.sleep(0.02)
+    ctypes.windll.user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+
+def hotkey_zoom_open():
+    # Win + Numpad +
+    ctypes.windll.user32.keybd_event(VK_LWIN, 0, 0, 0)
+    time.sleep(0.03)
+    ctypes.windll.user32.keybd_event(VK_ADD_NUMPAD, 0, 0, 0)
+    time.sleep(0.03)
+    ctypes.windll.user32.keybd_event(VK_ADD_NUMPAD, 0, KEYEVENTF_KEYUP, 0)
+    ctypes.windll.user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+
+def hotkey_zoom_close():
+    # Win + Esc
+    ctypes.windll.user32.keybd_event(VK_LWIN, 0, 0, 0)
+    time.sleep(0.03)
+    ctypes.windll.user32.keybd_event(VK_ESCAPE, 0, 0, 0)
+    time.sleep(0.03)
+    ctypes.windll.user32.keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0)
+    ctypes.windll.user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)
+
+def zoom_in_windows():
+    global zoom_active, last_zoom_toggle_time, zoom_on_since
+
+    now = time.time()
+    if zoom_active:
+        return
+    if now - last_zoom_toggle_time < ZOOM_TOGGLE_COOLDOWN:
+        return
+
+    try:
+        hotkey_zoom_open()
+        zoom_active = True
+        zoom_on_since = now
+        last_zoom_toggle_time = now
+        print("[ZOOM] ON")
+    except Exception as e:
+        print("[ZOOM] No se pudo activar:", e)
+
+def zoom_out_windows():
+    global zoom_active, last_zoom_toggle_time, zoom_on_since
+
+    now = time.time()
+    if not zoom_active:
+        return
+    if now - last_zoom_toggle_time < ZOOM_TOGGLE_COOLDOWN:
+        return
+
+    # no apagar demasiado pronto
+    if (now - zoom_on_since) < ZOOM_MIN_ON_SEC:
+        return
+
+    try:
+        hotkey_zoom_close()
+        zoom_active = False
+        last_zoom_toggle_time = now
+        print("[ZOOM] OFF")
+    except Exception as e:
+        print("[ZOOM] No se pudo desactivar:", e)
 
 # =========================================
 # ========== DRAG FUNCTIONS ===============
@@ -747,6 +855,26 @@ def open_camera(index):
     return cap
 
 # =========================================
+# ==========   GLOBAL HOTKEYS   ===========
+# =========================================
+
+def on_press(key):
+    global RUNNING, PAUSED
+    try:
+        if key == keyboard.Key.f12:
+            print("[HOTKEY] F12 -> salir")
+            RUNNING = False
+        elif key == keyboard.Key.f11:
+            PAUSED = not PAUSED
+            print(f"[HOTKEY] F11 -> pausa={'ON' if PAUSED else 'OFF'}")
+    except Exception:
+        pass
+
+hotkey_listener = keyboard.Listener(on_press=on_press)
+hotkey_listener.start()
+
+
+# =========================================
 # ==========     INICIALIZACIÓN   =========
 # =========================================
 
@@ -777,11 +905,14 @@ NOSE_FILTER_Y.reset()
 # ==========     LOOP PRINCIPAL    =========
 # =========================================
 
-while True:
+while RUNNING:
     ok, frame = cap.read()
     if not ok:
         continue
-
+    if PAUSED:
+        time.sleep(0.05)
+        continue
+    
     frame = cv2.flip(frame, 1)
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     res = face_mesh.process(rgb)
@@ -796,6 +927,7 @@ while True:
         # Boca suavizada (solo visual y freno)
         ratio_raw = mouth_open_ratio(lm)
         mouth_ratio_vis = (1 - 0.5)*mouth_ratio_vis + 0.5*ratio_raw
+        mouth_open_now = ratio_raw >= SLOW_START_RATIO
 
         # Click
         action = detect_click(CLICK_MODE, lm, ratio_raw, now)
@@ -835,6 +967,15 @@ while True:
         else:
             t = (ratio_raw - SLOW_START_RATIO) / (CLICK_ARM_RATIO - SLOW_START_RATIO)
             speed = 1.0 - t*t*(1 - MIN_SPEED_SCALE_AT_MAX)
+
+        # =========================================
+        # ==========   AUTO ZOOM WINDOWS  =========
+        # =========================================
+        if AUTO_ZOOM_ENABLED:
+            if speed <= ZOOM_TRIGGER_SPEED and not zoom_active:
+                zoom_in_windows()
+            elif speed >= ZOOM_EXIT_SPEED and zoom_active:
+                zoom_out_windows()
 
         # -------- Movimiento RELATIVO --------
         if MODE_RELATIVE:
@@ -901,7 +1042,25 @@ while True:
                         nose_prev_fx = None
                         nose_prev_fy = None
 
-        status_text = f"Face: OK | mode={CLICK_MODE} | stabilize={'ON' if STABILIZE else 'OFF'} | speed={speed:.2f}"
+        status_text = (
+            f"Face: OK | mode={CLICK_MODE} | speed={speed:.2f} | "
+            f"drag={'ON' if drag_active else 'OFF'} | "
+            f"zoom={'ON' if zoom_active else 'OFF'} | "
+            f"mouth={'OPEN' if mouth_open_now else 'CLOSED'} | "
+            f"stab={'ON' if STABILIZE else 'OFF'}"
+        )
+
+        if DEBUG_CONSOLE and (now - last_debug_print) >= DEBUG_PRINT_EVERY_SEC:
+            print(
+                f"[STATE] speed={speed:.2f} | "
+                f"drag={'ON' if drag_active else 'OFF'} | "
+                f"zoom={'ON' if zoom_active else 'OFF'} | "
+                f"mouth={'OPEN' if mouth_open_now else 'CLOSED'} | "
+                f"ratio={ratio_raw:.3f} | "
+                f"stab={'ON' if STABILIZE else 'OFF'}"
+            )
+            last_debug_print = now
+
 
         # -------- Overlay --------
         if SHOW_OVERLAY:
@@ -911,9 +1070,28 @@ while True:
             cv2.circle(frame, (cx, cy), 5, (0,255,0), -1)
 
             # Barra boca
-            cv2.rectangle(frame, (10,50), (210,70), (40,40,40), -1)
-            bl = int(min(200, 200*(mouth_ratio_vis/0.055)))
-            cv2.rectangle(frame, (10,50), (10+bl,70), (0,255,255), -1)
+            cv2.rectangle(frame, (10, 50), (260, 75), (40, 40, 40), -1)
+
+            # llenado
+            bar_max = 240
+            bl = int(min(bar_max, bar_max * (mouth_ratio_vis / max(CLICK_ARM_RATIO, 0.001))))
+            cv2.rectangle(frame, (10, 50), (10 + bl, 75), (0, 255, 255), -1)
+
+            # marcas de umbral
+            slow_x = 10 + int(bar_max * (SLOW_START_RATIO / max(CLICK_ARM_RATIO, 0.001)))
+            arm_x  = 10 + int(bar_max * (CLICK_ARM_RATIO / max(CLICK_ARM_RATIO, 0.001)))
+            cv2.line(frame, (slow_x, 45), (slow_x, 80), (180, 180, 255), 2)
+            cv2.line(frame, (arm_x, 45), (arm_x, 80), (0, 180, 255), 2)
+
+            cv2.putText(
+                frame,
+                f"MOUTH: {'OPEN' if mouth_open_now else 'CLOSED'}  ratio={ratio_raw:.3f}",
+                (10, 105),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (200, 255, 200),
+                2
+            )
 
             cv2.putText(frame, status_text, (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,255,255), 2)
@@ -927,10 +1105,19 @@ while True:
     k = cv2.waitKey(1)
 
     if k == ord('q'):
+        if zoom_active:
+            zoom_out_windows()
         break
-
     elif k == ord('c'):
         center_mouse()  
+        
+if zoom_active:
+    zoom_out_windows()
+
+hotkey_listener.stop()
+cap.release()
+cv2.destroyAllWindows()
+face_mesh.close()        
     
 cap.release()
 cv2.destroyAllWindows()
