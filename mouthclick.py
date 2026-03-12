@@ -377,6 +377,72 @@ from tkinter import ttk
 from collections import deque
 from pynput import keyboard
 import ctypes
+import threading
+
+
+class CursorOverlay:
+    def __init__(self, master):
+        self.root = tk.Toplevel(master)
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.attributes("-transparentcolor", "black")
+        self.root.configure(bg="black")
+
+        self.size = 80
+        self.canvas = tk.Canvas(
+            self.root,
+            width=self.size,
+            height=self.size,
+            bg="black",
+            highlightthickness=0,
+            bd=0
+        )
+        self.canvas.pack()
+
+    def update_overlay(self, cursor_x, cursor_y, progress):
+        x = int(cursor_x - self.size // 2)
+        y = int(cursor_y - self.size // 2)
+        self.root.geometry(f"{self.size}x{self.size}+{x}+{y}")
+
+        self.canvas.delete("all")
+
+        cx = self.size // 2
+        cy = self.size // 2
+        r = 22
+
+        # círculo base
+        self.canvas.create_oval(
+            cx - r, cy - r, cx + r, cy + r,
+            outline="gray",
+            width=4
+        )
+
+        # progreso
+        if progress > 0:
+            extent = progress * 360
+            self.canvas.create_arc(
+                cx - r, cy - r, cx + r, cy + r,
+                start=90,
+                extent=-extent,
+                style="arc",
+                outline="yellow",
+                width=4
+            )
+
+        # punto central
+        self.canvas.create_oval(
+            cx - 3, cy - 3, cx + 3, cy + 3,
+            fill="lime", outline="lime"
+        )
+
+        self.root.update()   # <- importante
+
+    def destroy(self):
+        try:
+            self.root.destroy()
+        except:
+            pass
+
 
 # =========================================
 # ==========   MENU GRAFICO GUI   =========
@@ -386,7 +452,7 @@ def show_gui_menu():
     window = tk.Tk()
     window.title("Configuración FaceMouse")
     window.resizable(False, False)
-    zoom_var = tk.BooleanVar(value=False)
+    zoom_var = tk.BooleanVar(value=True)
 
     # Tamaño automático según contenido (anti cortes)
     window.update_idletasks()
@@ -395,7 +461,7 @@ def show_gui_menu():
     click_mode_var = tk.StringVar(value="mouth")
     cam_index_var = tk.StringVar(value="0")
     sensitivity_var = tk.StringVar(value="media")
-    stabilize_var = tk.BooleanVar(value=True)  # ✅ nuevo
+    stabilize_var = tk.BooleanVar(value=False)  # ✅ nuevo
 
     title = tk.Label(window, text="FACE MOUSE CONTROL", font=("Arial", 16, "bold"))
     title.pack(pady=10)
@@ -461,11 +527,16 @@ def show_gui_menu():
     bool(zoom_var.get())
     )
     
+
 CLICK_MODE, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED = show_gui_menu()
 print("Modo:", CLICK_MODE)
 print("Cam:", CAMERA_INDEX)
 print("Sens:", SENS)
 print("Stabilize:", STABILIZE)
+
+overlay_root = tk.Tk()
+overlay_root.withdraw()
+cursor_overlay = CursorOverlay(overlay_root)
 
 # =========================================
 # ==========   CONFIGURACIÓN   ============
@@ -551,6 +622,28 @@ RUNNING = True
 PAUSED = False
 
 
+cursor_speed = 0
+prev_cursor_pos = pyautogui.position()
+prev_speed_time = time.time()
+
+
+
+
+# =========================================
+# ========== DWELL CLICK CONFIG ===========
+# =========================================
+DWELL_ENABLED = True
+DWELL_CLICK_SEC = 3.0              # segundos quieto para click
+DWELL_STILL_RADIUS_PX = 12         # tolerancia de movimiento para considerarlo "quieto"
+DWELL_POST_CLICK_DELAY = 1.0       # evita clicks repetidos inmediatos
+
+last_move_time = time.time()
+last_dwell_click_time = 0.0
+last_cursor_pos = pyautogui.position()
+
+
+
+
 # =========================================
 # ==========  One Euro Filter  ============
 # =========================================
@@ -604,6 +697,35 @@ class OneEuroFilter1D:
 # - beta más alto = reacciona mejor a movimientos rápidos (menos lag)
 NOSE_FILTER_X = OneEuroFilter1D(min_cutoff=1.4, beta=0.05, d_cutoff=1.0)
 NOSE_FILTER_Y = OneEuroFilter1D(min_cutoff=1.4, beta=0.05, d_cutoff=1.0)
+
+
+# - Círculo de AutoClick
+
+def draw_dwell_ring(frame, center, progress, radius=28, thickness=4):
+    """
+    Dibuja un anillo de progreso en sentido horario.
+    progress: 0.0 a 1.0
+    """
+    x, y = center
+
+    # círculo base gris
+    cv2.circle(frame, (x, y), radius, (80, 80, 80), thickness)
+
+    # progreso
+    if progress > 0:
+        end_angle = int(360 * progress)
+        cv2.ellipse(
+            frame,
+            (x, y),
+            (radius, radius),
+            -90,          # arranca arriba
+            0,
+            end_angle,
+            (0, 255, 255),
+            thickness
+        )
+
+
 
 # =========================================
 # ==========    CLICK FUNCTIONS   =========
@@ -760,66 +882,41 @@ drag_started_at = None
 
 
 def detect_click(mode, lm, ratio_raw, now):
-    global drag_active, drag_started_at
     global mouth_open_prev, mouth_open_start, mouth_click_armed
     global last_click_time, last_wink_time
     global last_left_ear, last_right_ear
 
     # =========================
-    # MODO BOCA (click/doble/drag)
+    # MODO BOCA
     # =========================
     if mode == "mouth":
         opened = (ratio_raw >= SLOW_START_RATIO)
         clicked = None
 
-        # inicio de apertura
         if opened and not mouth_open_prev:
             mouth_open_start = now
-            drag_started_at = None  # reset drag timer
 
-        # mientras está abierta
-        if opened:
-            # “armar” click cuando supera el umbral fuerte
-            if ratio_raw >= CLICK_ARM_RATIO:
-                mouth_click_armed = True
-
-                # iniciar conteo para drag
-                if drag_started_at is None:
-                    drag_started_at = now
-
-                # si se mantuvo abierta suficiente → empezar drag
-                if (not drag_active) and (now - drag_started_at >= DRAG_START_SEC):
-                    start_drag()
-            else:
-                # si abrió un poco pero no llegó a “armar”, no cuenta drag
-                drag_started_at = None
-
-        # cierre de boca
         if (not opened) and mouth_open_prev and (mouth_open_start is not None):
             dur = now - mouth_open_start
 
-            # si estaba arrastrando, al cerrar suelta y NO hace click
-            if drag_active:
-                stop_drag()
-            else:
-                # click / doble click como antes
-                if mouth_click_armed and (now - last_click_time >= CLICK_COOLDOWN_SEC):
-                    if dur >= CLICK_LONG_SEC:
-                        clicked = "double"
-                    elif dur >= CLICK_SHORT_SEC:
-                        clicked = "click"
-                    last_click_time = now
+            if mouth_click_armed and (now - last_click_time >= CLICK_COOLDOWN_SEC):
+                if dur >= CLICK_LONG_SEC:
+                    clicked = "double"
+                elif dur >= CLICK_SHORT_SEC:
+                    clicked = "click"
+                last_click_time = now
 
-            # reset
             mouth_open_start = None
             mouth_click_armed = False
-            drag_started_at = None
+
+        if ratio_raw >= CLICK_ARM_RATIO:
+            mouth_click_armed = True
 
         mouth_open_prev = opened
         return clicked
 
     # =========================
-    # MODOS GUIÑO (EAR)
+    # MODOS GUIÑO
     # =========================
     left = eye_aspect_ratio(lm, LEFT_EYE_IDX)
     right = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
@@ -857,21 +954,35 @@ def open_camera(index):
 # =========================================
 # ==========   GLOBAL HOTKEYS   ===========
 # =========================================
-
 def on_press(key):
-    global RUNNING, PAUSED
+    global RUNNING, PAUSED, drag_active
+
     try:
+
         if key == keyboard.Key.f12:
             print("[HOTKEY] F12 -> salir")
+            if zoom_active:
+                zoom_out_windows()
             RUNNING = False
+
         elif key == keyboard.Key.f11:
             PAUSED = not PAUSED
-            print(f"[HOTKEY] F11 -> pausa={'ON' if PAUSED else 'OFF'}")
+            print("[HOTKEY] F11 -> pausa", PAUSED)
+
+        elif key == keyboard.Key.f10:
+            if drag_active:
+                stop_drag()
+                print("[HOTKEY] DRAG OFF")
+            else:
+                start_drag()
+                print("[HOTKEY] DRAG ON")
+
     except Exception:
         pass
 
 hotkey_listener = keyboard.Listener(on_press=on_press)
 hotkey_listener.start()
+
 
 
 # =========================================
@@ -900,6 +1011,21 @@ nose_prev_fy = None
 # para que al comenzar no “salte”
 NOSE_FILTER_X.reset()
 NOSE_FILTER_Y.reset()
+
+dwell_progress = 0.0
+mouth_open_now = False
+speed = 1.0
+
+# DWELL CLICK
+DWELL_ENABLED = True
+DWELL_CLICK_SEC = 2.0
+DWELL_STILL_RADIUS_PX = 20
+DWELL_POST_CLICK_DELAY = 1.0
+
+last_move_time = time.time()
+last_dwell_click_time = 0.0
+last_cursor_pos = pyautogui.position()
+dwell_progress = 0.0
 
 # =========================================
 # ==========     LOOP PRINCIPAL    =========
@@ -972,11 +1098,12 @@ while RUNNING:
         # ==========   AUTO ZOOM WINDOWS  =========
         # =========================================
         if AUTO_ZOOM_ENABLED:
-            if speed <= ZOOM_TRIGGER_SPEED and not zoom_active:
-                zoom_in_windows()
-            elif speed >= ZOOM_EXIT_SPEED and zoom_active:
-                zoom_out_windows()
 
+            if cursor_speed < 40 and not zoom_active:
+                zoom_in_windows()
+
+            elif cursor_speed > 80 and zoom_active:
+                zoom_out_windows()
         # -------- Movimiento RELATIVO --------
         if MODE_RELATIVE:
             if nose_prev_fx is None:
@@ -1022,32 +1149,68 @@ while RUNNING:
                 if abs(target_x - cur_x) >= DEAD_ZONE or abs(target_y - cur_y) >= DEAD_ZONE:
                     pyautogui.moveTo(target_x, target_y, duration=0.01)
                     cur_x, cur_y = target_x, target_y
-                    last_move_time = time.time()
-            
+
+                    now_pos = pyautogui.position()
+                    dt = time.time() - prev_speed_time
+
+                    if dt > 0:
+                        dist = np.hypot(
+                            now_pos[0] - prev_cursor_pos[0],
+                            now_pos[1] - prev_cursor_pos[1]
+                        )
+
+                        cursor_speed = dist / dt
+
+                    prev_cursor_pos = now_pos
+                    prev_speed_time = time.time()
+
             # =========================================
             # ========== DWELL CLICK (AUTO) ===========
             # =========================================
-            # Si está quieto X segundos → click automático
-            # (no se dispara si estás arrastrando, ni durante cooldown, ni si la boca está abierta)
-            if (not drag_active) and (time.time() >= suspend_move_until):
-                if (time.time() - last_move_time) >= DWELL_CLICK_SEC:
-                    # Evitar autoclick mientras está “abriendo” boca (para que no choque con tu click por boca)
-                    if ratio_raw < SLOW_START_RATIO:
-                        do_click()
-                        # Reinicio para que no haga clicks en loop
-                        last_move_time = time.time() + 0.75
-                        # Reset filtros para evitar salto post click
-                        NOSE_FILTER_X.reset()
-                        NOSE_FILTER_Y.reset()
-                        nose_prev_fx = None
-                        nose_prev_fy = None
+            if DWELL_ENABLED:
+                current_cursor_pos = pyautogui.position()
 
+                moved_px = np.hypot(
+                    current_cursor_pos[0] - last_cursor_pos[0],
+                    current_cursor_pos[1] - last_cursor_pos[1]
+                )
+
+                if moved_px > DWELL_STILL_RADIUS_PX:
+                    last_move_time = now
+                    last_cursor_pos = current_cursor_pos
+                    dwell_progress = 0.0
+                else:
+                    if (not drag_active) and (now >= suspend_move_until):
+                        dwell_elapsed = now - last_move_time
+                        dwell_progress = clamp(dwell_elapsed / DWELL_CLICK_SEC, 0.0, 1.0)
+
+                        if dwell_elapsed >= DWELL_CLICK_SEC:
+                            if (now - last_dwell_click_time) >= DWELL_POST_CLICK_DELAY:
+                                print("[DWELL] CLICK")
+                                do_click()
+
+                                last_dwell_click_time = now
+                                last_move_time = now
+                                last_cursor_pos = pyautogui.position()
+                                dwell_progress = 0.0
+
+                                NOSE_FILTER_X.reset()
+                                NOSE_FILTER_Y.reset()
+                                nose_prev_fx = None
+                                nose_prev_fy = None
+                    else:
+                        dwell_progress = 0.0
+            else:
+                dwell_progress = 0.0
+
+                
         status_text = (
             f"Face: OK | mode={CLICK_MODE} | speed={speed:.2f} | "
+            f"cursor={cursor_speed:.1f} | "
             f"drag={'ON' if drag_active else 'OFF'} | "
             f"zoom={'ON' if zoom_active else 'OFF'} | "
             f"mouth={'OPEN' if mouth_open_now else 'CLOSED'} | "
-            f"stab={'ON' if STABILIZE else 'OFF'}"
+            f"stab={'ON' if STABILIZE else 'OFF'}"  
         )
 
         if DEBUG_CONSOLE and (now - last_debug_print) >= DEBUG_PRINT_EVERY_SEC:
@@ -1101,6 +1264,28 @@ while RUNNING:
 
             cv2.putText(frame, f"DeadzoneNorm: {NOSE_DEADZONE_NORM:.4f}  Leak: {LEAK:.2f}",
                         (10,180), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180,255,180), 2)
+            
+            cv2.putText(frame, f"Dwell: {'ON' if DWELL_ENABLED else 'OFF'}  prog={dwell_progress:.2f}",
+            (10, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200,255,255), 2)
+
+        if DEBUG_CONSOLE and (now - last_debug_print) >= DEBUG_PRINT_EVERY_SEC:
+            print(
+                f"[STATE] speed={speed:.2f} | "
+                f"cursor_speed={cursor_speed:.2f} | "
+                f"drag={'ON' if drag_active else 'OFF'} | "
+                f"zoom={'ON' if zoom_active else 'OFF'} | "
+                f"mouth={'OPEN' if mouth_open_now else 'CLOSED'} | "
+                f"ratio={ratio_raw:.3f} | "
+                f"dwell={dwell_progress:.2f} | "
+                f"stab={'ON' if STABILIZE else 'OFF'}"
+            )
+            last_debug_print = now
+
+        cursor_pos = pyautogui.position()
+        test_progress = dwell_progress if DWELL_ENABLED else 0.25
+        cursor_overlay.update_overlay(cursor_pos[0], cursor_pos[1], max(dwell_progress, 0.15))
+    
+    cv2.imshow("Face Mouse", frame)
 
     k = cv2.waitKey(1)
 
@@ -1110,15 +1295,36 @@ while RUNNING:
         break
     elif k == ord('c'):
         center_mouse()  
-        
-if zoom_active:
-    zoom_out_windows()
 
-hotkey_listener.stop()
+try:
+    if zoom_active:
+        zoom_out_windows()
+except:
+    pass
+
+try:
+    hotkey_listener.stop()
+except:
+    pass
+
+try:
+    face_mesh.close()
+except:
+    pass
+
+try:
+    cursor_overlay.destroy()
+except:
+    pass
+
+try:
+    face_mesh.close()
+except Exception:
+    pass
+
 cap.release()
 cv2.destroyAllWindows()
-face_mesh.close()        
-    
-cap.release()
-cv2.destroyAllWindows()
-face_mesh.close()
+
+
+
+#hacer burbuja flotante que se pueda cambiar click o doble click en el momento
