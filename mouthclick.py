@@ -460,6 +460,9 @@ class CursorOverlay:
     def show(self):
         try:
             self.root.deiconify()
+            self.root.lift()  # traer al frente
+            self.root.attributes("-topmost", True)  # asegurar prioridad
+            self.root.update()
         except:
             pass
 
@@ -888,11 +891,45 @@ def start_drag():
         print("DRAG START")
 
 def stop_drag():
-    global drag_active
+    global drag_active, last_move_time, dwell_progress, last_cursor_pos
+
     if drag_active:
         pyautogui.mouseUp(button="left")
         drag_active = False
         print("DRAG STOP")
+
+        # resetear dwell correctamente
+        last_move_time = time.time()
+        last_cursor_pos = pyautogui.position()
+        dwell_progress = 0.0
+
+def center_mouse():
+    global cur_x, cur_y
+    global nose_prev_fx, nose_prev_fy
+    global last_move_time, last_cursor_pos, dwell_progress
+    global suspend_move_until
+
+    cur_x = SCREEN_W // 2
+    cur_y = SCREEN_H // 2
+
+    # mover cursor real al centro
+    pyautogui.moveTo(cur_x, cur_y, duration=0.05)
+
+    # reset de filtros / historial para evitar salto
+    nose_prev_fx = None
+    nose_prev_fy = None
+    NOSE_FILTER_X.reset()
+    NOSE_FILTER_Y.reset()
+
+    # reset dwell
+    last_move_time = time.time()
+    last_cursor_pos = pyautogui.position()
+    dwell_progress = 0.0
+
+    # pequeño cooldown para no clickear o saltar enseguida
+    suspend_move_until = time.time() + 0.15
+
+    print("[HOTKEY] Mouse centrado")
 
 # =========================================
 # ==========  BOCA Y OJOS (EAR)  ==========
@@ -975,12 +1012,12 @@ def calibrate_wink_thresholds(cap, face_mesh):
     RIGHT_EYE_OPEN_EAR = float(np.median(samples_right))
 
     # ojo cerrado = ~72% del abierto
-    LEFT_EYE_CLOSED_THR = LEFT_EYE_OPEN_EAR * 0.80
-    RIGHT_EYE_CLOSED_THR = RIGHT_EYE_OPEN_EAR * 0.80
+    LEFT_EYE_CLOSED_THR = LEFT_EYE_OPEN_EAR * 0.88
+    RIGHT_EYE_CLOSED_THR = RIGHT_EYE_OPEN_EAR * 0.88
 
     # ojo “abierto suficiente” = ~90% del abierto calibrado
-    LEFT_EYE_OPEN_THR = LEFT_EYE_OPEN_EAR * 0.78
-    RIGHT_EYE_OPEN_THR = RIGHT_EYE_OPEN_EAR * 0.78 
+    LEFT_EYE_OPEN_THR = LEFT_EYE_OPEN_EAR * 0.92
+    RIGHT_EYE_OPEN_THR = RIGHT_EYE_OPEN_EAR * 0.92 
 
     print("[CAL] Calibración completada:")
     print(f"      LEFT open={LEFT_EYE_OPEN_EAR:.3f} closed_thr={LEFT_EYE_CLOSED_THR:.3f} open_thr={LEFT_EYE_OPEN_THR:.3f}")
@@ -1063,16 +1100,18 @@ def detect_click(mode, lm, ratio_raw, now):
         if left_closed and right_open:
             if (now - last_wink_time) > WINK_COOLDOWN:
                 last_wink_time = now
+                print(f"[WINK LEFT] L={left:.3f} R={right:.3f}")
                 return "click"
 
-        if mode == "wink_right":
-            right_closed = right < RIGHT_EYE_CLOSED_THR
-            left_open = left > LEFT_EYE_OPEN_THR
+    elif mode == "wink_right":
+        right_closed = right < RIGHT_EYE_CLOSED_THR
+        left_open = left > LEFT_EYE_OPEN_THR
 
-            if right_closed and left_open:
-                if (now - last_wink_time) > WINK_COOLDOWN:
-                    last_wink_time = now
-                    return "click"
+        if right_closed and left_open:
+            if (now - last_wink_time) > WINK_COOLDOWN:
+                last_wink_time = now
+                print(f"[WINK RIGHT] L={left:.3f} R={right:.3f}")
+                return "click"
 
     return None
 
@@ -1112,13 +1151,20 @@ def on_press(key):
             print("[HOTKEY] F9 -> recalibrar guiño")
             calibrate_wink_thresholds(cap, face_mesh)
         
+        elif key == keyboard.Key.f7:
+            center_mouse()
+        
         elif key == keyboard.Key.f8:
             DWELL_ENABLED = not DWELL_ENABLED
             print(f"[HOTKEY] F8 -> autoclick {'ON' if DWELL_ENABLED else 'OFF'}")
-            if not DWELL_ENABLED:
-                # reset visual
-                global dwell_progress
-                dwell_progress = 0.0
+
+            global dwell_progress
+            dwell_progress = 0.0
+
+            if DWELL_ENABLED:
+                cursor_overlay.show()
+            else:
+                cursor_overlay.hide()
 
         elif key == keyboard.Key.f10:
             if drag_active:
@@ -1436,7 +1482,11 @@ while RUNNING:
 
         cursor_pos = pyautogui.position()
         test_progress = dwell_progress if DWELL_ENABLED else 0.25
-        cursor_overlay.update_overlay(cursor_pos[0], cursor_pos[1], max(dwell_progress, 0.15))
+        if DWELL_ENABLED:
+            cursor_overlay.show()
+            cursor_overlay.update_overlay(cursor_pos[0], cursor_pos[1], dwell_progress)
+        else:
+            cursor_overlay.hide()   
     
     cv2.imshow("Face Mouse", frame)
 
