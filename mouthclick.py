@@ -385,19 +385,33 @@ class CursorOverlay:
         self.root = tk.Toplevel(master)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.attributes("-transparentcolor", "black")
-        self.root.configure(bg="black")
+
+        # Usar blanco como color transparente
+        self.root.configure(bg="white")
+        self.root.attributes("-transparentcolor", "white")
 
         self.size = 80
         self.canvas = tk.Canvas(
             self.root,
             width=self.size,
             height=self.size,
-            bg="black",
+            bg="white",
             highlightthickness=0,
             bd=0
         )
         self.canvas.pack()
+
+        # Hacer la ventana "click-through" sin tocar layered
+        self.root.update_idletasks()
+        hwnd = self.root.winfo_id()
+
+        GWL_EXSTYLE = -20
+        WS_EX_TRANSPARENT = 0x00000020
+        WS_EX_TOOLWINDOW = 0x00000080
+
+        ex_style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        ex_style |= WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW
+        ctypes.windll.user32.SetWindowLongW(hwnd, GWL_EXSTYLE, ex_style)
 
     def update_overlay(self, cursor_x, cursor_y, progress):
         x = int(cursor_x - self.size // 2)
@@ -435,14 +449,25 @@ class CursorOverlay:
             fill="lime", outline="lime"
         )
 
-        self.root.update()   # <- importante
+        self.root.update()
+
+    def hide(self):
+        try:
+            self.root.withdraw()
+        except:
+            pass
+
+    def show(self):
+        try:
+            self.root.deiconify()
+        except:
+            pass
 
     def destroy(self):
         try:
             self.root.destroy()
         except:
             pass
-
 
 # =========================================
 # ==========   MENU GRAFICO GUI   =========
@@ -733,17 +758,45 @@ def draw_dwell_ring(frame, center, progress, radius=28, thickness=4):
 
 def do_click():
     global suspend_move_until
+
     x, y = pyautogui.position()
     suspend_move_until = time.time() + SUSPEND_MOVE_SEC
+
+    try:
+        cursor_overlay.hide()
+    except:
+        pass
+
+    time.sleep(0.03)
     pyautogui.click(x=x, y=y, button="left")
+    time.sleep(0.03)
+
+    try:
+        cursor_overlay.show()
+    except:
+        pass
 
 def do_double_click():
     global suspend_move_until
+
     x, y = pyautogui.position()
     suspend_move_until = time.time() + SUSPEND_MOVE_SEC
+
+    try:
+        cursor_overlay.hide()
+    except:
+        pass
+
+    time.sleep(0.03)
     pyautogui.click(x=x, y=y)
     time.sleep(DBLCLICK_INTERVAL_SEC)
     pyautogui.click(x=x, y=y)
+    time.sleep(0.03)
+
+    try:
+        cursor_overlay.show()
+    except:
+        pass
 
 # =========================================
 # ==========   WINDOWS MAGNIFIER ==========
@@ -862,9 +915,89 @@ def eye_aspect_ratio(lm, idxs):
     h  = np.hypot(p[0].x - p[3].x, p[0].y - p[3].y)
     return (v1 + v2) / (2*h) if h > 1e-6 else 0.0
 
-EYE_CLOSED_THR = 0.22
-OTHER_MARGIN = 0.015
+def calibrate_wink_thresholds(cap, face_mesh):
+    global LEFT_EYE_OPEN_EAR, RIGHT_EYE_OPEN_EAR
+    global LEFT_EYE_CLOSED_THR, RIGHT_EYE_CLOSED_THR
+    global LEFT_EYE_OPEN_THR, RIGHT_EYE_OPEN_THR
+
+    print("[CAL] Calibrando ojos abiertos... mirá al frente y mantené los ojos relajados.")
+
+    start_time = time.time()
+    samples_left = []
+    samples_right = []
+
+    while time.time() - start_time < WINK_CALIBRATION_SEC:
+        ok, frame = cap.read()
+        if not ok:
+            continue
+
+        frame = cv2.flip(frame, 1)
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        res = face_mesh.process(rgb)
+
+        remaining = max(0.0, WINK_CALIBRATION_SEC - (time.time() - start_time))
+
+        if res.multi_face_landmarks:
+            lm = res.multi_face_landmarks[0].landmark
+
+            left_ear = eye_aspect_ratio(lm, LEFT_EYE_IDX)
+            right_ear = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
+
+            # evitar valores absurdos
+            if 0.05 < left_ear < 0.80:
+                samples_left.append(left_ear)
+            if 0.05 < right_ear < 0.80:
+                samples_right.append(right_ear)
+
+            cv2.putText(frame, "CALIBRANDO OJOS ABIERTOS...", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+
+            cv2.putText(frame, f"Tiempo restante: {remaining:.1f}s", (20, 80),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 255, 200), 2)
+
+            cv2.putText(frame, f"L EAR: {left_ear:.3f}  R EAR: {right_ear:.3f}", (20, 120),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 200, 0), 2)
+        else:
+            cv2.putText(frame, "No detecto la cara...", (20, 40),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 100, 255), 2)
+
+        cv2.imshow("Calibracion de Guiño", frame)
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cv2.destroyWindow("Calibracion de Guiño")
+
+    if len(samples_left) < 10 or len(samples_right) < 10:
+        print("[CAL] No se pudo calibrar bien. Se mantienen umbrales por defecto.")
+        return
+
+    LEFT_EYE_OPEN_EAR = float(np.median(samples_left))
+    RIGHT_EYE_OPEN_EAR = float(np.median(samples_right))
+
+    # ojo cerrado = ~72% del abierto
+    LEFT_EYE_CLOSED_THR = LEFT_EYE_OPEN_EAR * 0.80
+    RIGHT_EYE_CLOSED_THR = RIGHT_EYE_OPEN_EAR * 0.80
+
+    # ojo “abierto suficiente” = ~90% del abierto calibrado
+    LEFT_EYE_OPEN_THR = LEFT_EYE_OPEN_EAR * 0.78
+    RIGHT_EYE_OPEN_THR = RIGHT_EYE_OPEN_EAR * 0.78 
+
+    print("[CAL] Calibración completada:")
+    print(f"      LEFT open={LEFT_EYE_OPEN_EAR:.3f} closed_thr={LEFT_EYE_CLOSED_THR:.3f} open_thr={LEFT_EYE_OPEN_THR:.3f}")
+    print(f"      RIGHT open={RIGHT_EYE_OPEN_EAR:.3f} closed_thr={RIGHT_EYE_CLOSED_THR:.3f} open_thr={RIGHT_EYE_OPEN_THR:.3f}")
+
+# ===== Calibración de guiño =====
 WINK_COOLDOWN = 0.45
+WINK_CALIBRATION_SEC = 3.0
+
+LEFT_EYE_OPEN_EAR = 0.30
+RIGHT_EYE_OPEN_EAR = 0.30
+
+LEFT_EYE_CLOSED_THR = 0.22
+RIGHT_EYE_CLOSED_THR = 0.22
+
+LEFT_EYE_OPEN_THR = 0.26
+RIGHT_EYE_OPEN_THR = 0.26
 
 last_wink_time = 0.0
 last_left_ear = 0.0
@@ -924,16 +1057,22 @@ def detect_click(mode, lm, ratio_raw, now):
     last_right_ear = right
 
     if mode == "wink_left":
-        if left < EYE_CLOSED_THR and right > EYE_CLOSED_THR + OTHER_MARGIN:
+        left_closed = left < LEFT_EYE_CLOSED_THR
+        right_open = right > RIGHT_EYE_OPEN_THR
+
+        if left_closed and right_open:
             if (now - last_wink_time) > WINK_COOLDOWN:
                 last_wink_time = now
                 return "click"
 
-    if mode == "wink_right":
-        if right < EYE_CLOSED_THR and left > EYE_CLOSED_THR + OTHER_MARGIN:
-            if (now - last_wink_time) > WINK_COOLDOWN:
-                last_wink_time = now
-                return "click"
+        if mode == "wink_right":
+            right_closed = right < RIGHT_EYE_CLOSED_THR
+            left_open = left > LEFT_EYE_OPEN_THR
+
+            if right_closed and left_open:
+                if (now - last_wink_time) > WINK_COOLDOWN:
+                    last_wink_time = now
+                    return "click"
 
     return None
 
@@ -955,7 +1094,7 @@ def open_camera(index):
 # ==========   GLOBAL HOTKEYS   ===========
 # =========================================
 def on_press(key):
-    global RUNNING, PAUSED, drag_active
+    global RUNNING, PAUSED, drag_active, DWELL_ENABLED
 
     try:
 
@@ -968,6 +1107,18 @@ def on_press(key):
         elif key == keyboard.Key.f11:
             PAUSED = not PAUSED
             print("[HOTKEY] F11 -> pausa", PAUSED)
+        
+        elif key == keyboard.Key.f9:
+            print("[HOTKEY] F9 -> recalibrar guiño")
+            calibrate_wink_thresholds(cap, face_mesh)
+        
+        elif key == keyboard.Key.f8:
+            DWELL_ENABLED = not DWELL_ENABLED
+            print(f"[HOTKEY] F8 -> autoclick {'ON' if DWELL_ENABLED else 'OFF'}")
+            if not DWELL_ENABLED:
+                # reset visual
+                global dwell_progress
+                dwell_progress = 0.0
 
         elif key == keyboard.Key.f10:
             if drag_active:
@@ -1001,6 +1152,8 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_detection_confidence=0.3,
     min_tracking_confidence=0.3
 )
+
+calibrate_wink_thresholds(cap, face_mesh)
 
 cur_x, cur_y = SCREEN_W // 2, SCREEN_H // 2
 
