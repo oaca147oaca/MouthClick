@@ -378,7 +378,7 @@ from collections import deque
 from pynput import keyboard
 import ctypes
 import threading
-
+from pygrabber.dshow_graph import FilterGraph
 
 class CursorOverlay:
     def __init__(self, master):
@@ -472,6 +472,35 @@ class CursorOverlay:
         except:
             pass
 
+def list_camera_names():
+    """
+    Devuelve una lista de nombres de cámaras disponibles en Windows.
+    Si falla, devuelve una lista vacía.
+    """
+    try:
+        graph = FilterGraph()
+        devices = graph.get_input_devices()
+        return devices if devices else []
+    except Exception as e:
+        print(f"[WARN] No se pudieron listar cámaras por nombre: {e}")
+        return []
+
+
+def get_camera_options():
+    """
+    Devuelve:
+    - cam_names: lista de nombres visibles en el combobox
+    - cam_map: dict nombre -> índice
+    """
+    cam_names = list_camera_names()
+
+    if not cam_names:
+        # fallback
+        cam_names = ["Cam 0", "Cam 1", "Cam 2"]
+
+    cam_map = {name: idx for idx, name in enumerate(cam_names)}
+    return cam_names, cam_map
+
 # =========================================
 # ==========   MENU GRAFICO GUI   =========
 # =========================================
@@ -487,7 +516,6 @@ def show_gui_menu():
     window.geometry("")
 
     click_mode_var = tk.StringVar(value="mouth")
-    cam_index_var = tk.StringVar(value="0")
     sensitivity_var = tk.StringVar(value="media")
     stabilize_var = tk.BooleanVar(value=False)  # ✅ nuevo
 
@@ -509,8 +537,17 @@ def show_gui_menu():
     frame_cam = tk.LabelFrame(window, text="Índice de cámara")
     frame_cam.pack(fill="x", padx=20, pady=10)
 
-    ttk.Combobox(frame_cam, textvariable=cam_index_var,
-                 values=["0", "1", "2", "3", "4"]).pack(padx=10, pady=5)
+    cam_names, cam_map = get_camera_options()
+
+    default_cam = cam_names[0] if cam_names else "Cam 0"
+    cam_index_var = tk.StringVar(value=default_cam)
+
+    ttk.Combobox(
+        frame_cam,
+        textvariable=cam_index_var,
+        values=cam_names,
+        state="readonly"
+    ).pack(padx=10, pady=5)
 
     frame_sens = tk.LabelFrame(window, text="Sensibilidad")
     frame_sens.pack(fill="x", padx=20, pady=10)
@@ -547,12 +584,13 @@ def show_gui_menu():
               command=start, bg="#4CAF50", fg="white").pack(pady=18)
 
     window.mainloop()
+
     return (
-    click_mode_var.get(),
-    int(cam_index_var.get()),
-    sensitivity_var.get(),
-    bool(stabilize_var.get()),
-    bool(zoom_var.get())
+        click_mode_var.get(),
+        cam_map.get(cam_index_var.get(), 0),
+        sensitivity_var.get(),
+        bool(stabilize_var.get()),
+        bool(zoom_var.get())
     )
     
 
@@ -561,6 +599,7 @@ print("Modo:", CLICK_MODE)
 print("Cam:", CAMERA_INDEX)
 print("Sens:", SENS)
 print("Stabilize:", STABILIZE)
+
 
 overlay_root = tk.Tk()
 overlay_root.withdraw()
@@ -754,6 +793,32 @@ def draw_dwell_ring(frame, center, progress, radius=28, thickness=4):
         )
 
 
+def draw_eye_bar(frame, x, y, width, height, value, closed_thr, open_ear, label, active=False):
+    # fondo
+    cv2.rectangle(frame, (x, y), (x + width, y + height), (40, 40, 40), -1)
+
+    # valor normalizado respecto al ojo abierto calibrado
+    denom = max(open_ear, 1e-6)
+    frac = max(0.0, min(1.0, value / denom))
+    fill_w = int(width * frac)
+
+    color = (0, 255, 255) if active else (180, 220, 255)
+    cv2.rectangle(frame, (x, y), (x + fill_w, y + height), color, -1)
+
+    # marca de cerrado
+    thr_frac = max(0.0, min(1.0, closed_thr / denom))
+    thr_x = x + int(width * thr_frac)
+    cv2.line(frame, (thr_x, y - 3), (thr_x, y + height + 3), (0, 100, 255), 2)
+
+    cv2.putText(
+        frame,
+        f"{label}: {value:.3f}",
+        (x, y - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (255, 220, 120),
+        2
+    )
 
 # =========================================
 # ==========    CLICK FUNCTIONS   =========
@@ -1011,13 +1076,7 @@ def calibrate_wink_thresholds(cap, face_mesh):
     LEFT_EYE_OPEN_EAR = float(np.median(samples_left))
     RIGHT_EYE_OPEN_EAR = float(np.median(samples_right))
 
-    # ojo cerrado = ~72% del abierto
-    LEFT_EYE_CLOSED_THR = LEFT_EYE_OPEN_EAR * 0.88
-    RIGHT_EYE_CLOSED_THR = RIGHT_EYE_OPEN_EAR * 0.88
-
-    # ojo “abierto suficiente” = ~90% del abierto calibrado
-    LEFT_EYE_OPEN_THR = LEFT_EYE_OPEN_EAR * 0.92
-    RIGHT_EYE_OPEN_THR = RIGHT_EYE_OPEN_EAR * 0.92 
+    recompute_wink_thresholds()
 
     print("[CAL] Calibración completada:")
     print(f"      LEFT open={LEFT_EYE_OPEN_EAR:.3f} closed_thr={LEFT_EYE_CLOSED_THR:.3f} open_thr={LEFT_EYE_OPEN_THR:.3f}")
@@ -1030,15 +1089,23 @@ WINK_CALIBRATION_SEC = 3.0
 LEFT_EYE_OPEN_EAR = 0.30
 RIGHT_EYE_OPEN_EAR = 0.30
 
+# Sensibilidad ajustable en tiempo real
+# más alto = más sensible (requiere menos cerrar)
+WINK_CLOSED_FACTOR = 0.92
+WINK_OPEN_FACTOR = 0.85
+
 LEFT_EYE_CLOSED_THR = 0.22
 RIGHT_EYE_CLOSED_THR = 0.22
-
 LEFT_EYE_OPEN_THR = 0.26
 RIGHT_EYE_OPEN_THR = 0.26
 
 last_wink_time = 0.0
 last_left_ear = 0.0
 last_right_ear = 0.0
+
+left_ear_vis = 0.0
+right_ear_vis = 0.0
+EAR_VIS_ALPHA = 0.35
 
 # Estados boca
 mouth_ratio_vis = 0.0
@@ -1051,14 +1118,26 @@ drag_active = False
 drag_started_at = None
 
 
+def recompute_wink_thresholds():
+    global LEFT_EYE_CLOSED_THR, RIGHT_EYE_CLOSED_THR
+    global LEFT_EYE_OPEN_THR, RIGHT_EYE_OPEN_THR
+
+    LEFT_EYE_CLOSED_THR = LEFT_EYE_OPEN_EAR * WINK_CLOSED_FACTOR
+    RIGHT_EYE_CLOSED_THR = RIGHT_EYE_OPEN_EAR * WINK_CLOSED_FACTOR
+
+    LEFT_EYE_OPEN_THR = LEFT_EYE_OPEN_EAR * WINK_OPEN_FACTOR
+    RIGHT_EYE_OPEN_THR = RIGHT_EYE_OPEN_EAR * WINK_OPEN_FACTOR
+
+    print("[WINK] Sensibilidad actualizada:")
+    print(f"       closed_factor={WINK_CLOSED_FACTOR:.2f} open_factor={WINK_OPEN_FACTOR:.2f}")
+    print(f"       L closed<{LEFT_EYE_CLOSED_THR:.3f} open>{LEFT_EYE_OPEN_THR:.3f}")
+    print(f"       R closed<{RIGHT_EYE_CLOSED_THR:.3f} open>{RIGHT_EYE_OPEN_THR:.3f}")
+
 def detect_click(mode, lm, ratio_raw, now):
     global mouth_open_prev, mouth_open_start, mouth_click_armed
     global last_click_time, last_wink_time
     global last_left_ear, last_right_ear
 
-    # =========================
-    # MODO BOCA
-    # =========================
     if mode == "mouth":
         opened = (ratio_raw >= SLOW_START_RATIO)
         clicked = None
@@ -1085,9 +1164,6 @@ def detect_click(mode, lm, ratio_raw, now):
         mouth_open_prev = opened
         return clicked
 
-    # =========================
-    # MODOS GUIÑO
-    # =========================
     left = eye_aspect_ratio(lm, LEFT_EYE_IDX)
     right = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
     last_left_ear = left
@@ -1100,17 +1176,15 @@ def detect_click(mode, lm, ratio_raw, now):
         if left_closed and right_open:
             if (now - last_wink_time) > WINK_COOLDOWN:
                 last_wink_time = now
-                print(f"[WINK LEFT] L={left:.3f} R={right:.3f}")
                 return "click"
 
-    elif mode == "wink_right":
+    if mode == "wink_right":
         right_closed = right < RIGHT_EYE_CLOSED_THR
         left_open = left > LEFT_EYE_OPEN_THR
 
         if right_closed and left_open:
             if (now - last_wink_time) > WINK_COOLDOWN:
                 last_wink_time = now
-                print(f"[WINK RIGHT] L={left:.3f} R={right:.3f}")
                 return "click"
 
     return None
@@ -1134,9 +1208,9 @@ def open_camera(index):
 # =========================================
 def on_press(key):
     global RUNNING, PAUSED, drag_active, DWELL_ENABLED
+    global dwell_progress, WINK_CLOSED_FACTOR, WINK_OPEN_FACTOR
 
     try:
-
         if key == keyboard.Key.f12:
             print("[HOTKEY] F12 -> salir")
             if zoom_active:
@@ -1146,25 +1220,6 @@ def on_press(key):
         elif key == keyboard.Key.f11:
             PAUSED = not PAUSED
             print("[HOTKEY] F11 -> pausa", PAUSED)
-        
-        elif key == keyboard.Key.f9:
-            print("[HOTKEY] F9 -> recalibrar guiño")
-            calibrate_wink_thresholds(cap, face_mesh)
-        
-        elif key == keyboard.Key.f7:
-            center_mouse()
-        
-        elif key == keyboard.Key.f8:
-            DWELL_ENABLED = not DWELL_ENABLED
-            print(f"[HOTKEY] F8 -> autoclick {'ON' if DWELL_ENABLED else 'OFF'}")
-
-            global dwell_progress
-            dwell_progress = 0.0
-
-            if DWELL_ENABLED:
-                cursor_overlay.show()
-            else:
-                cursor_overlay.hide()
 
         elif key == keyboard.Key.f10:
             if drag_active:
@@ -1173,6 +1228,32 @@ def on_press(key):
             else:
                 start_drag()
                 print("[HOTKEY] DRAG ON")
+
+        elif key == keyboard.Key.f9:
+            print("[HOTKEY] F9 -> recalibrar guiño")
+            calibrate_wink_thresholds(cap, face_mesh)
+
+        elif key == keyboard.Key.f8:
+            DWELL_ENABLED = not DWELL_ENABLED
+            print(f"[HOTKEY] F8 -> autoclick {'ON' if DWELL_ENABLED else 'OFF'}")
+            dwell_progress = 0.0
+            if DWELL_ENABLED:
+                cursor_overlay.show()
+            else:
+                cursor_overlay.hide()
+
+        elif key == keyboard.Key.f7:
+            center_mouse()
+
+        elif key == keyboard.Key.f5:
+            WINK_CLOSED_FACTOR = min(0.98, WINK_CLOSED_FACTOR + 0.02)
+            recompute_wink_thresholds()
+            print("[HOTKEY] F5 -> guiño más sensible")
+
+        elif key == keyboard.Key.f6:
+            WINK_CLOSED_FACTOR = max(0.70, WINK_CLOSED_FACTOR - 0.02)
+            recompute_wink_thresholds()
+            print("[HOTKEY] F6 -> guiño menos sensible")
 
     except Exception:
         pass
@@ -1216,7 +1297,7 @@ mouth_open_now = False
 speed = 1.0
 
 # DWELL CLICK
-DWELL_ENABLED = True
+DWELL_ENABLED = False
 DWELL_CLICK_SEC = 2.0
 DWELL_STILL_RADIUS_PX = 20
 DWELL_POST_CLICK_DELAY = 1.0
@@ -1256,6 +1337,10 @@ while RUNNING:
 
         # Click
         action = detect_click(CLICK_MODE, lm, ratio_raw, now)
+
+        left_ear_vis = (1 - EAR_VIS_ALPHA) * left_ear_vis + EAR_VIS_ALPHA * last_left_ear
+        right_ear_vis = (1 - EAR_VIS_ALPHA) * right_ear_vis + EAR_VIS_ALPHA * last_right_ear
+
         if action == "click":
             do_click()
             # reset de filtros para evitar “rebote” post-click
@@ -1412,17 +1497,6 @@ while RUNNING:
             f"stab={'ON' if STABILIZE else 'OFF'}"  
         )
 
-        if DEBUG_CONSOLE and (now - last_debug_print) >= DEBUG_PRINT_EVERY_SEC:
-            print(
-                f"[STATE] speed={speed:.2f} | "
-                f"drag={'ON' if drag_active else 'OFF'} | "
-                f"zoom={'ON' if zoom_active else 'OFF'} | "
-                f"mouth={'OPEN' if mouth_open_now else 'CLOSED'} | "
-                f"ratio={ratio_raw:.3f} | "
-                f"stab={'ON' if STABILIZE else 'OFF'}"
-            )
-            last_debug_print = now
-
 
         # -------- Overlay --------
         if SHOW_OVERLAY:
@@ -1433,6 +1507,32 @@ while RUNNING:
 
             # Barra boca
             cv2.rectangle(frame, (10, 50), (260, 75), (40, 40, 40), -1)
+
+            left_active = (CLICK_MODE == "wink_left" and last_left_ear < LEFT_EYE_CLOSED_THR)
+            right_active = (CLICK_MODE == "wink_right" and last_right_ear < RIGHT_EYE_CLOSED_THR)
+
+            draw_eye_bar(
+                frame, 10, 235, 220, 18,
+                left_ear_vis, LEFT_EYE_CLOSED_THR, LEFT_EYE_OPEN_EAR,
+                "L EAR", active=left_active
+            )
+
+            draw_eye_bar(
+                frame, 10, 285, 220, 18,
+                right_ear_vis, RIGHT_EYE_CLOSED_THR, RIGHT_EYE_OPEN_EAR,
+                "R EAR", active=right_active
+            )
+
+            cv2.putText(
+                frame,
+                f"Wink sens: closed_factor={WINK_CLOSED_FACTOR:.2f} open_factor={WINK_OPEN_FACTOR:.2f}",
+                (10, 335),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 220, 120),
+                2
+            )
+
 
             # llenado
             bar_max = 240
