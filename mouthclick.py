@@ -501,6 +501,14 @@ def get_camera_options():
     cam_map = {name: idx for idx, name in enumerate(cam_names)}
     return cam_names, cam_map
 
+AVAILABLE_ACTIONS = [
+    "Nada",
+    "Click izquierdo",
+    "Doble click",
+    "Click derecho",
+    "Drag toggle"
+]
+
 # =========================================
 # ==========   MENU GRAFICO GUI   =========
 # =========================================
@@ -522,17 +530,38 @@ def show_gui_menu():
     title = tk.Label(window, text="FACE MOUSE CONTROL", font=("Arial", 16, "bold"))
     title.pack(pady=10)
 
-    frame_click = tk.LabelFrame(window, text="Modo de Click")
+    mouth_action_var = tk.StringVar(value="Click izquierdo")
+    wink_left_action_var = tk.StringVar(value="Nada")
+    wink_right_action_var = tk.StringVar(value="Nada")
+
+    frame_click = tk.LabelFrame(window, text="Acciones por gesto")
     frame_click.pack(fill="x", padx=20, pady=10)
 
-    tk.Radiobutton(frame_click, text="Boca (click / doble click)",
-                   variable=click_mode_var, value="mouth").pack(anchor="w", padx=10)
+    tk.Label(frame_click, text="Boca").pack(anchor="w", padx=10)
+    ttk.Combobox(
+        frame_click,
+        textvariable=mouth_action_var,
+        values=AVAILABLE_ACTIONS,
+        state="readonly"
+    ).pack(fill="x", padx=10, pady=4)
 
-    tk.Radiobutton(frame_click, text="Guiño izquierdo (click)",
-                   variable=click_mode_var, value="wink_left").pack(anchor="w", padx=10)
+    tk.Label(frame_click, text="Guiño izquierdo").pack(anchor="w", padx=10)
+    ttk.Combobox(
+        frame_click,
+        textvariable=wink_left_action_var,
+        values=AVAILABLE_ACTIONS,
+        state="readonly"
+    ).pack(fill="x", padx=10, pady=4)
 
-    tk.Radiobutton(frame_click, text="Guiño derecho (click)",
-                   variable=click_mode_var, value="wink_right").pack(anchor="w", padx=10)
+    tk.Label(frame_click, text="Guiño derecho").pack(anchor="w", padx=10)
+    ttk.Combobox(
+        frame_click,
+        textvariable=wink_right_action_var,
+        values=AVAILABLE_ACTIONS,
+        state="readonly"
+    ).pack(fill="x", padx=10, pady=4)
+
+
 
     frame_cam = tk.LabelFrame(window, text="Índice de cámara")
     frame_cam.pack(fill="x", padx=20, pady=10)
@@ -586,16 +615,20 @@ def show_gui_menu():
     window.mainloop()
 
     return (
-        click_mode_var.get(),
-        cam_map.get(cam_index_var.get(), 0),
-        sensitivity_var.get(),
-        bool(stabilize_var.get()),
-        bool(zoom_var.get())
-    )
+    {
+        "mouth": mouth_action_var.get(),
+        "wink_left": wink_left_action_var.get(),
+        "wink_right": wink_right_action_var.get()
+    },
+    cam_map.get(cam_index_var.get(), 0),
+    sensitivity_var.get(),
+    bool(stabilize_var.get()),
+    bool(zoom_var.get())
+)
     
 
-CLICK_MODE, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED = show_gui_menu()
-print("Modo:", CLICK_MODE)
+GESTURE_ACTIONS, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED = show_gui_menu()
+print("Acciones:", GESTURE_ACTIONS)
 print("Cam:", CAMERA_INDEX)
 print("Sens:", SENS)
 print("Stabilize:", STABILIZE)
@@ -614,18 +647,31 @@ MODE_RELATIVE = True
 REL_GAIN_X = 12000
 REL_GAIN_Y = 7680
 
-if SENS == "baja":
-    REL_GAIN_X = 3000
-    REL_GAIN_Y = 1920
-elif SENS == "media-baja":
-    REL_GAIN_X = 7500
-    REL_GAIN_Y = 4800
-elif SENS == "media-alta":
-    REL_GAIN_X = 16500
-    REL_GAIN_Y = 10560
-elif SENS == "alta":
-    REL_GAIN_X = 21000
-    REL_GAIN_Y = 13440
+SENS_LEVELS = ["baja", "media-baja", "media", "media-alta", "alta"]
+CURRENT_SENS_INDEX = SENS_LEVELS.index(SENS) if SENS in SENS_LEVELS else 2
+
+def apply_sensitivity(level_name):
+    global REL_GAIN_X, REL_GAIN_Y
+
+    if level_name == "baja":
+        REL_GAIN_X = 3000
+        REL_GAIN_Y = 1920
+    elif level_name == "media-baja":
+        REL_GAIN_X = 7500
+        REL_GAIN_Y = 4800
+    elif level_name == "media":
+        REL_GAIN_X = 12000
+        REL_GAIN_Y = 7680
+    elif level_name == "media-alta":
+        REL_GAIN_X = 16500
+        REL_GAIN_Y = 10560
+    elif level_name == "alta":
+        REL_GAIN_X = 21000
+        REL_GAIN_Y = 13440
+
+    print(f"[SENS] Sensibilidad: {level_name} -> REL_GAIN_X={REL_GAIN_X} REL_GAIN_Y={REL_GAIN_Y}")
+
+apply_sensitivity(SENS_LEVELS[CURRENT_SENS_INDEX])
 
 ABS_GAIN_X = 2.0
 ABS_GAIN_Y = 1.8
@@ -844,6 +890,45 @@ def do_click():
     except:
         pass
 
+def do_right_click():
+    global suspend_move_until
+
+    x, y = pyautogui.position()
+    suspend_move_until = time.time() + SUSPEND_MOVE_SEC
+
+    try:
+        cursor_overlay.hide()
+    except:
+        pass
+
+    time.sleep(0.03)
+    pyautogui.click(x=x, y=y, button="right")
+    time.sleep(0.03)
+
+    try:
+        cursor_overlay.show()
+    except:
+        pass
+
+def execute_action(action_name):
+    if action_name == "Nada":
+        return
+
+    elif action_name == "Click izquierdo":
+        do_click()
+
+    elif action_name == "Doble click":
+        do_double_click()
+
+    elif action_name == "Click derecho":
+        do_right_click()
+
+    elif action_name == "Drag toggle":
+        if drag_active:
+            stop_drag()
+        else:
+            start_drag()
+
 def do_double_click():
     global suspend_move_until
 
@@ -1022,7 +1107,7 @@ def calibrate_wink_thresholds(cap, face_mesh):
     global LEFT_EYE_CLOSED_THR, RIGHT_EYE_CLOSED_THR
     global LEFT_EYE_OPEN_THR, RIGHT_EYE_OPEN_THR
 
-    print("[CAL] Calibrando ojos abiertos... mirá al frente y mantené los ojos relajados.")
+    print("[CAL] Calibrando ojos abiertos... mirá el círculo del centro y mantené los ojos relajados.")
 
     start_time = time.time()
     samples_left = []
@@ -1037,7 +1122,14 @@ def calibrate_wink_thresholds(cap, face_mesh):
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         res = face_mesh.process(rgb)
 
-        remaining = max(0.0, WINK_CALIBRATION_SEC - (time.time() - start_time))
+        elapsed = time.time() - start_time
+        remaining = max(0.0, WINK_CALIBRATION_SEC - elapsed)
+        progress = min(1.0, elapsed / WINK_CALIBRATION_SEC)
+
+        h, w = frame.shape[:2]
+        cx = w // 2
+        cy = h // 2
+        r = 40
 
         if res.multi_face_landmarks:
             lm = res.multi_face_landmarks[0].landmark
@@ -1045,13 +1137,12 @@ def calibrate_wink_thresholds(cap, face_mesh):
             left_ear = eye_aspect_ratio(lm, LEFT_EYE_IDX)
             right_ear = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
 
-            # evitar valores absurdos
             if 0.05 < left_ear < 0.80:
                 samples_left.append(left_ear)
             if 0.05 < right_ear < 0.80:
                 samples_right.append(right_ear)
 
-            cv2.putText(frame, "CALIBRANDO OJOS ABIERTOS...", (20, 40),
+            cv2.putText(frame, "CALIBRANDO OJOS ABIERTOS", (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
 
             cv2.putText(frame, f"Tiempo restante: {remaining:.1f}s", (20, 80),
@@ -1062,6 +1153,28 @@ def calibrate_wink_thresholds(cap, face_mesh):
         else:
             cv2.putText(frame, "No detecto la cara...", (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 100, 255), 2)
+
+        # círculo guía central
+        cv2.circle(frame, (cx, cy), r, (120, 120, 120), 3)
+
+        # progreso de calibración
+        end_angle = int(360 * progress)
+        cv2.ellipse(
+            frame,
+            (cx, cy),
+            (r, r),
+            -90,
+            0,
+            end_angle,
+            (0, 255, 255),
+            4
+        )
+
+        # punto central
+        cv2.circle(frame, (cx, cy), 4, (0, 255, 0), -1)
+
+        cv2.putText(frame, "Mira este punto", (cx - 70, cy + 70),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
 
         cv2.imshow("Calibracion de Guiño", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -1081,6 +1194,7 @@ def calibrate_wink_thresholds(cap, face_mesh):
     print("[CAL] Calibración completada:")
     print(f"      LEFT open={LEFT_EYE_OPEN_EAR:.3f} closed_thr={LEFT_EYE_CLOSED_THR:.3f} open_thr={LEFT_EYE_OPEN_THR:.3f}")
     print(f"      RIGHT open={RIGHT_EYE_OPEN_EAR:.3f} closed_thr={RIGHT_EYE_CLOSED_THR:.3f} open_thr={RIGHT_EYE_OPEN_THR:.3f}")
+
 
 # ===== Calibración de guiño =====
 WINK_COOLDOWN = 0.45
@@ -1133,59 +1247,56 @@ def recompute_wink_thresholds():
     print(f"       L closed<{LEFT_EYE_CLOSED_THR:.3f} open>{LEFT_EYE_OPEN_THR:.3f}")
     print(f"       R closed<{RIGHT_EYE_CLOSED_THR:.3f} open>{RIGHT_EYE_OPEN_THR:.3f}")
 
-def detect_click(mode, lm, ratio_raw, now):
+def detect_gesture(lm, ratio_raw, now):
     global mouth_open_prev, mouth_open_start, mouth_click_armed
     global last_click_time, last_wink_time
     global last_left_ear, last_right_ear
 
-    if mode == "mouth":
-        opened = (ratio_raw >= SLOW_START_RATIO)
-        clicked = None
+    # ===== Boca =====
+    opened = (ratio_raw >= SLOW_START_RATIO)
 
-        if opened and not mouth_open_prev:
-            mouth_open_start = now
+    if opened and not mouth_open_prev:
+        mouth_open_start = now
 
-        if (not opened) and mouth_open_prev and (mouth_open_start is not None):
-            dur = now - mouth_open_start
+    if (not opened) and mouth_open_prev and (mouth_open_start is not None):
+        dur = now - mouth_open_start
 
-            if mouth_click_armed and (now - last_click_time >= CLICK_COOLDOWN_SEC):
-                if dur >= CLICK_LONG_SEC:
-                    clicked = "double"
-                elif dur >= CLICK_SHORT_SEC:
-                    clicked = "click"
+        if mouth_click_armed and (now - last_click_time >= CLICK_COOLDOWN_SEC):
+            if dur >= CLICK_SHORT_SEC:
                 last_click_time = now
+                mouth_open_start = None
+                mouth_click_armed = False
+                mouth_open_prev = opened
+                return "mouth"
 
-            mouth_open_start = None
-            mouth_click_armed = False
+        mouth_open_start = None
+        mouth_click_armed = False
 
-        if ratio_raw >= CLICK_ARM_RATIO:
-            mouth_click_armed = True
+    if ratio_raw >= CLICK_ARM_RATIO:
+        mouth_click_armed = True
 
-        mouth_open_prev = opened
-        return clicked
+    mouth_open_prev = opened
 
+    # ===== Ojos =====
     left = eye_aspect_ratio(lm, LEFT_EYE_IDX)
     right = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
     last_left_ear = left
     last_right_ear = right
 
-    if mode == "wink_left":
-        left_closed = left < LEFT_EYE_CLOSED_THR
-        right_open = right > RIGHT_EYE_OPEN_THR
+    left_closed = left < LEFT_EYE_CLOSED_THR
+    right_closed = right < RIGHT_EYE_CLOSED_THR
+    left_open = left > LEFT_EYE_OPEN_THR
+    right_open = right > RIGHT_EYE_OPEN_THR
 
-        if left_closed and right_open:
-            if (now - last_wink_time) > WINK_COOLDOWN:
-                last_wink_time = now
-                return "click"
+    if left_closed and right_open:
+        if (now - last_wink_time) > WINK_COOLDOWN:
+            last_wink_time = now
+            return "wink_left"
 
-    if mode == "wink_right":
-        right_closed = right < RIGHT_EYE_CLOSED_THR
-        left_open = left > LEFT_EYE_OPEN_THR
-
-        if right_closed and left_open:
-            if (now - last_wink_time) > WINK_COOLDOWN:
-                last_wink_time = now
-                return "click"
+    if right_closed and left_open:
+        if (now - last_wink_time) > WINK_COOLDOWN:
+            last_wink_time = now
+            return "wink_right"
 
     return None
 
@@ -1208,7 +1319,7 @@ def open_camera(index):
 # =========================================
 def on_press(key):
     global RUNNING, PAUSED, drag_active, DWELL_ENABLED
-    global dwell_progress, WINK_CLOSED_FACTOR, WINK_OPEN_FACTOR
+    global dwell_progress, WINK_CLOSED_FACTOR, WINK_OPEN_FACTOR, CURRENT_SENS_INDEX
 
     try:
         if key == keyboard.Key.f12:
@@ -1254,6 +1365,16 @@ def on_press(key):
             WINK_CLOSED_FACTOR = max(0.70, WINK_CLOSED_FACTOR - 0.02)
             recompute_wink_thresholds()
             print("[HOTKEY] F6 -> guiño menos sensible")
+
+        elif key == keyboard.Key.f3:
+            CURRENT_SENS_INDEX = max(0, CURRENT_SENS_INDEX - 1)
+            apply_sensitivity(SENS_LEVELS[CURRENT_SENS_INDEX])
+            print(f"[HOTKEY] F3 -> sensibilidad {SENS_LEVELS[CURRENT_SENS_INDEX]}")
+
+        elif key == keyboard.Key.f4:
+            CURRENT_SENS_INDEX = min(len(SENS_LEVELS) - 1, CURRENT_SENS_INDEX + 1)
+            apply_sensitivity(SENS_LEVELS[CURRENT_SENS_INDEX])
+            print(f"[HOTKEY] F4 -> sensibilidad {SENS_LEVELS[CURRENT_SENS_INDEX]}")
 
     except Exception:
         pass
@@ -1335,21 +1456,20 @@ while RUNNING:
         mouth_ratio_vis = (1 - 0.5)*mouth_ratio_vis + 0.5*ratio_raw
         mouth_open_now = ratio_raw >= SLOW_START_RATIO
 
-        # Click
-        action = detect_click(CLICK_MODE, lm, ratio_raw, now)
-
+        # Detectar gesto (nuevo sistema)
+        gesture = detect_gesture(lm, ratio_raw, now)
+            
+        # suavizado visual de ojos (lo mantenés igual)
         left_ear_vis = (1 - EAR_VIS_ALPHA) * left_ear_vis + EAR_VIS_ALPHA * last_left_ear
         right_ear_vis = (1 - EAR_VIS_ALPHA) * right_ear_vis + EAR_VIS_ALPHA * last_right_ear
 
-        if action == "click":
-            do_click()
+        # Ejecutar acción según configuración
+        if gesture is not None:
+            action_name = GESTURE_ACTIONS.get(gesture, "Nada")
+
+            execute_action(action_name)
+
             # reset de filtros para evitar “rebote” post-click
-            NOSE_FILTER_X.reset()
-            NOSE_FILTER_Y.reset()
-            nose_prev_fx = None
-            nose_prev_fy = None
-        elif action == "double":
-            do_double_click()
             NOSE_FILTER_X.reset()
             NOSE_FILTER_Y.reset()
             nose_prev_fx = None
@@ -1489,12 +1609,14 @@ while RUNNING:
 
                 
         status_text = (
-            f"Face: OK | mode={CLICK_MODE} | speed={speed:.2f} | "
+            f"Face: OK | mode={GESTURE_ACTIONS if 'GESTURE_ACTIONS' in globals() else 'legacy'} | "
+            f"sens={SENS_LEVELS[CURRENT_SENS_INDEX]} | "
+            f"speed={speed:.2f} | "
             f"cursor={cursor_speed:.1f} | "
             f"drag={'ON' if drag_active else 'OFF'} | "
             f"zoom={'ON' if zoom_active else 'OFF'} | "
             f"mouth={'OPEN' if mouth_open_now else 'CLOSED'} | "
-            f"stab={'ON' if STABILIZE else 'OFF'}"  
+            f"stab={'ON' if STABILIZE else 'OFF'}"
         )
 
 
@@ -1508,20 +1630,29 @@ while RUNNING:
             # Barra boca
             cv2.rectangle(frame, (10, 50), (260, 75), (40, 40, 40), -1)
 
-            left_active = (CLICK_MODE == "wink_left" and last_left_ear < LEFT_EYE_CLOSED_THR)
-            right_active = (CLICK_MODE == "wink_right" and last_right_ear < RIGHT_EYE_CLOSED_THR)
-
-            draw_eye_bar(
-                frame, 10, 235, 220, 18,
-                left_ear_vis, LEFT_EYE_CLOSED_THR, LEFT_EYE_OPEN_EAR,
-                "L EAR", active=left_active
+            left_active = (
+                GESTURE_ACTIONS.get("wink_left", "Nada") != "Nada"
+                and last_left_ear < LEFT_EYE_CLOSED_THR
             )
 
-            draw_eye_bar(
-                frame, 10, 285, 220, 18,
-                right_ear_vis, RIGHT_EYE_CLOSED_THR, RIGHT_EYE_OPEN_EAR,
-                "R EAR", active=right_active
+            right_active = (
+                GESTURE_ACTIONS.get("wink_right", "Nada") != "Nada"
+                and last_right_ear < RIGHT_EYE_CLOSED_THR
             )
+
+            if GESTURE_ACTIONS.get("wink_left") != "Nada":
+                draw_eye_bar(
+                    frame, 10, 235, 220, 18,
+                    left_ear_vis, LEFT_EYE_CLOSED_THR, LEFT_EYE_OPEN_EAR,
+                    "L EAR", active=left_active
+                )
+
+            if GESTURE_ACTIONS.get("wink_right") != "Nada":
+                draw_eye_bar(
+                    frame, 10, 285, 220, 18,
+                    right_ear_vis, RIGHT_EYE_CLOSED_THR, RIGHT_EYE_OPEN_EAR,
+                    "R EAR", active=right_active
+                )
 
             cv2.putText(
                 frame,
@@ -1532,6 +1663,9 @@ while RUNNING:
                 (255, 220, 120),
                 2
             )
+
+            cv2.putText(frame, f"Boca={GESTURE_ACTIONS['mouth']} | LI={GESTURE_ACTIONS['wink_left']} | LD={GESTURE_ACTIONS['wink_right']}",
+            (10, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 220, 120), 2)
 
 
             # llenado
