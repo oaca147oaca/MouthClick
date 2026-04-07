@@ -537,6 +537,8 @@ def show_gui_menu():
     frame_click = tk.LabelFrame(window, text="Acciones por gesto")
     frame_click.pack(fill="x", padx=20, pady=10)
 
+    dwell_time_var = tk.StringVar(value="2.0")
+
     tk.Label(frame_click, text="Boca").pack(anchor="w", padx=10)
     ttk.Combobox(
         frame_click,
@@ -612,6 +614,17 @@ def show_gui_menu():
     tk.Button(window, text="COMENZAR", font=("Arial", 14, "bold"),
               command=start, bg="#4CAF50", fg="white").pack(pady=18)
 
+
+    frame_dwell = tk.LabelFrame(window, text="Tiempo de autoclick")
+    frame_dwell.pack(fill="x", padx=20, pady=10)
+
+    ttk.Combobox(
+        frame_dwell,
+        textvariable=dwell_time_var,
+        values=["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
+        state="readonly"
+    ).pack(padx=10, pady=5)
+
     window.mainloop()
 
     return (
@@ -623,15 +636,17 @@ def show_gui_menu():
     cam_map.get(cam_index_var.get(), 0),
     sensitivity_var.get(),
     bool(stabilize_var.get()),
-    bool(zoom_var.get())
+    bool(zoom_var.get()),
+    float(dwell_time_var.get())
 )
     
 
-GESTURE_ACTIONS, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED = show_gui_menu()
+GESTURE_ACTIONS, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED, DWELL_CLICK_SEC = show_gui_menu()
 print("Acciones:", GESTURE_ACTIONS)
 print("Cam:", CAMERA_INDEX)
 print("Sens:", SENS)
 print("Stabilize:", STABILIZE)
+print("DwellTime", DWELL_CLICK_SEC)
 
 
 overlay_root = tk.Tk()
@@ -717,8 +732,14 @@ def clamp_with_margin(v, lo, hi, m=SAFE_MARGIN):
     return max(lo+m, min(hi-m, v))
 
 # Auto click por permanencia
-DWELL_CLICK_SEC = 3.0
+DWELL_ENABLED = True
+DWELL_STILL_RADIUS_PX = 20
+DWELL_POST_CLICK_DELAY = 1.0
+
 last_move_time = time.time()
+last_dwell_click_time = 0.0
+last_cursor_pos = pyautogui.position()
+dwell_progress = 0.0
 
 ZOOM_TRIGGER_SPEED = 0.20      # activa zoom cuando speed baja de esto
 ZOOM_EXIT_SPEED = 0.80         # se apaga recién cuando speed sube bastante
@@ -746,13 +767,13 @@ prev_speed_time = time.time()
 # ========== DWELL CLICK CONFIG ===========
 # =========================================
 DWELL_ENABLED = True
-DWELL_CLICK_SEC = 3.0              # segundos quieto para click
-DWELL_STILL_RADIUS_PX = 12         # tolerancia de movimiento para considerarlo "quieto"
-DWELL_POST_CLICK_DELAY = 1.0       # evita clicks repetidos inmediatos
+DWELL_STILL_RADIUS_PX = 20
+DWELL_POST_CLICK_DELAY = 1.0
 
 last_move_time = time.time()
 last_dwell_click_time = 0.0
 last_cursor_pos = pyautogui.position()
+dwell_progress = 0.0
 
 
 
@@ -1419,7 +1440,6 @@ speed = 1.0
 
 # DWELL CLICK
 DWELL_ENABLED = False
-DWELL_CLICK_SEC = 2.0
 DWELL_STILL_RADIUS_PX = 20
 DWELL_POST_CLICK_DELAY = 1.0
 
@@ -1602,6 +1622,7 @@ while RUNNING:
                                 NOSE_FILTER_Y.reset()
                                 nose_prev_fx = None
                                 nose_prev_fy = None
+
                     else:
                         dwell_progress = 0.0
             else:
@@ -1698,8 +1719,8 @@ while RUNNING:
             cv2.putText(frame, f"DeadzoneNorm: {NOSE_DEADZONE_NORM:.4f}  Leak: {LEAK:.2f}",
                         (10,180), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180,255,180), 2)
             
-            cv2.putText(frame, f"Dwell: {'ON' if DWELL_ENABLED else 'OFF'}  prog={dwell_progress:.2f}",
-            (10, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200,255,255), 2)
+            cv2.putText(frame,f"Dwell: {'ON' if DWELL_ENABLED else 'OFF'}  t={DWELL_CLICK_SEC:.1f}s  prog={dwell_progress:.2f}",
+                    (10, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200,255,255), 2)
 
         if DEBUG_CONSOLE and (now - last_debug_print) >= DEBUG_PRINT_EVERY_SEC:
             print(
