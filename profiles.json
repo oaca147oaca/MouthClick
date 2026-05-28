@@ -1,0 +1,29 @@
+{
+    "Default": {
+        "mouth": "Nada",
+        "wink_left": "Click izquierdo",
+        "wink_right": "Click derecho",
+        "cam_name": null,
+        "sens_x": "media",
+        "sens_y": "media",
+        "stabilize": false,
+        "auto_zoom": false,
+        "dwell_time": 2.0,
+        "wink_diff_sens": "estricto",
+        "control_point": "nariz"
+    },
+    "Octavio": {
+        "mouth": "Drag toggle",
+        "wink_left": "Click izquierdo",
+        "wink_right": "Click derecho",
+        "camera": 0,
+        "sens_x": "media",
+        "sens_y": "media",
+        "sensitivity": "media",
+        "stabilize": true,
+        "zoom": false,
+        "dwell_time": 1.5,
+        "wink_diff_sens": "muy estricto",
+        "tracking_mode": "Punto manual"
+    }
+}

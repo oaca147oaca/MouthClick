@@ -14,6 +14,7 @@ from collections import deque
 from pynput import keyboard
 import ctypes
 import threading
+import json
 from pygrabber.dshow_graph import FilterGraph
 
 class CursorOverlay:
@@ -146,6 +147,38 @@ AVAILABLE_ACTIONS = [
 ]
 
 # =========================================
+# ==========   PERFILES JSON   ============
+# =========================================
+
+PROFILES_FILE = "profiles.json"
+
+DEFAULT_PROFILE = {
+    "mouth": "Click izquierdo",
+    "wink_left": "Nada",
+    "wink_right": "Nada",
+    "camera": 0,
+    "sensitivity": "media",
+    "stabilize": False,
+    "zoom": False,
+    "dwell_time": 2.0,
+    "control_point": "nariz"
+}
+
+def load_profiles():
+    if not os.path.exists(PROFILES_FILE):
+        return {"Default": DEFAULT_PROFILE}
+
+    try:
+        with open(PROFILES_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {"Default": DEFAULT_PROFILE}
+
+def save_profiles(profiles):
+    with open(PROFILES_FILE, "w", encoding="utf-8") as f:
+        json.dump(profiles, f, indent=4, ensure_ascii=False)
+
+# =========================================
 # ==========   MENU GRAFICO GUI   =========
 # =========================================
 
@@ -158,6 +191,8 @@ def show_gui_menu():
     # Tamaño automático según contenido (anti cortes)
     window.update_idletasks()
     window.geometry("")
+    profiles = load_profiles()
+    selected_profile = tk.StringVar(value=list(profiles.keys())[0])
 
     click_mode_var = tk.StringVar(value="mouth")
     sensitivity_var = tk.StringVar(value="alta")
@@ -165,6 +200,19 @@ def show_gui_menu():
 
     title = tk.Label(window, text="FACE MOUSE CONTROL", font=("Arial", 16, "bold"))
     title.pack(pady=10)
+
+    frame_profile = tk.LabelFrame(window, text="Perfil")
+    frame_profile.pack(fill="x", padx=20, pady=10)
+
+    profile_combo = ttk.Combobox(
+        frame_profile,
+        textvariable=selected_profile,
+        values=list(profiles.keys()),
+        state="readonly"
+    )
+
+    profile_combo.pack(fill="x", padx=10, pady=5)
+
 
     mouth_action_var = tk.StringVar(value="Click izquierdo")
     wink_left_action_var = tk.StringVar(value="Nada")
@@ -174,6 +222,29 @@ def show_gui_menu():
     frame_click.pack(fill="x", padx=20, pady=10)
 
     dwell_time_var = tk.StringVar(value="2.0")
+
+    def apply_profile(profile_name):
+        p = profiles.get(profile_name, DEFAULT_PROFILE)
+
+        mouth_action_var.set(p.get("mouth", "Click izquierdo"))
+        wink_left_action_var.set(p.get("wink_left", "Nada"))
+        wink_right_action_var.set(p.get("wink_right", "Nada"))
+
+        sensitivity_var.set(p.get("sensitivity", "media"))
+        stabilize_var.set(p.get("stabilize", False))
+        zoom_var.set(p.get("zoom", False))
+
+        dwell_time_var.set(str(p.get("dwell_time", 2.0)))
+
+        control_point_var.set(p.get("control_point", "nariz"))
+
+        cam_idx = p.get("camera", 0)
+
+        for k, v in cam_map.items():
+            if v == cam_idx:
+                cam_index_var.set(k)
+                break
+
 
     tk.Label(frame_click, text="Boca").pack(anchor="w", padx=10)
     ttk.Combobox(
@@ -206,7 +277,7 @@ def show_gui_menu():
 
     cam_names, cam_map = get_camera_options()
 
-    default_cam = cam_names[1] if cam_names else "Cam 1"
+    default_cam = cam_names[0] if cam_names else "Cam 0"
     cam_index_var = tk.StringVar(value=default_cam)
 
     ttk.Combobox(
@@ -236,6 +307,20 @@ def show_gui_menu():
     hint.pack(pady=5)
 
     def start():
+        profiles[selected_profile.get()] = {
+            "mouth": mouth_action_var.get(),
+            "wink_left": wink_left_action_var.get(),
+            "wink_right": wink_right_action_var.get(),
+            "camera": cam_map.get(cam_index_var.get(), 0),
+            "sensitivity": sensitivity_var.get(),
+            "stabilize": bool(stabilize_var.get()),
+            "zoom": bool(zoom_var.get()),
+            "dwell_time": float(dwell_time_var.get()),
+            "control_point": control_point_var.get()
+        }
+
+        save_profiles(profiles)
+
         window.destroy()
 
     frame_zoom = tk.LabelFrame(window, text="Zoom automático")
@@ -246,6 +331,26 @@ def show_gui_menu():
         text="Activar zoom al entrar en modo preciso/lento",
         variable=zoom_var
     ).pack(anchor="w", padx=10, pady=5)
+
+
+    frame_point = tk.LabelFrame(window, text="Punto de control")
+    frame_point.pack(fill="x", padx=20, pady=10)
+
+    control_point_var = tk.StringVar(value="nariz")
+
+    apply_profile(selected_profile.get())
+
+    profile_combo.bind(
+        "<<ComboboxSelected>>",
+        lambda e: apply_profile(selected_profile.get())
+    )
+
+    ttk.Combobox(
+        frame_point,
+        textvariable=control_point_var,
+        values=["nariz", "entrecejo"],
+        state="readonly"
+    ).pack(padx=10, pady=5)
 
     tk.Button(window, text="COMENZAR", font=("Arial", 14, "bold"),
               command=start, bg="#4CAF50", fg="white").pack(pady=18)
@@ -273,11 +378,12 @@ def show_gui_menu():
     sensitivity_var.get(),
     bool(stabilize_var.get()),
     bool(zoom_var.get()),
-    float(dwell_time_var.get())
+    float(dwell_time_var.get()),
+    control_point_var.get()
 )
     
 
-GESTURE_ACTIONS, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED, DWELL_CLICK_SEC = show_gui_menu()
+GESTURE_ACTIONS, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED, DWELL_CLICK_SEC, CONTROL_POINT = show_gui_menu()
 print("Acciones:", GESTURE_ACTIONS)
 print("Cam:", CAMERA_INDEX)
 print("Sens:", SENS)
@@ -285,9 +391,7 @@ print("Stabilize:", STABILIZE)
 print("DwellTime", DWELL_CLICK_SEC)
 
 
-overlay_root = tk.Tk()
-overlay_root.withdraw()
-cursor_overlay = CursorOverlay(overlay_root)
+
 
 # =========================================
 # ==========   CONFIGURACIÓN   ============
@@ -328,7 +432,7 @@ apply_sensitivity(SENS_LEVELS[CURRENT_SENS_INDEX])
 ABS_GAIN_X = 2.0
 ABS_GAIN_Y = 1.8
     
-ALPHA_NOSE = 0.35
+ALPHA_NOSE = 0.55
 MAX_PIXELS_PER_FRAME = 120
 
 # ✅ Zona muerta en píxeles (tuya)
@@ -336,10 +440,10 @@ DEAD_ZONE = 2
 
 # ✅ Zona muerta en coordenadas normalizadas (anti jitter real)
 # Valores típicos: 0.0015–0.006
-NOSE_DEADZONE_NORM = 0.0035 if STABILIZE else 0.0
+NOSE_DEADZONE_NORM = 0.0007 if STABILIZE else 0.008
 
 # ✅ “Leaky integrator”: atenúa micro-drift del modo relativo
-LEAK = 0.06 if STABILIZE else 0.0  # 0–0.15
+LEAK = 0.015 if STABILIZE else 0.0
 
 # Boca / clicks
 SLOW_START_RATIO = 0.035
@@ -361,6 +465,14 @@ SCREEN_W, SCREEN_H = pyautogui.size()
 suspend_move_until = 0.0
 
 SHOW_OVERLAY = True
+SHOW_CURSOR_DWELL_OVERLAY = False
+
+cursor_overlay = None
+
+if SHOW_CURSOR_DWELL_OVERLAY:
+    overlay_root = tk.Tk()
+    overlay_root.withdraw()
+    cursor_overlay = CursorOverlay(overlay_root)
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -462,12 +574,60 @@ class OneEuroFilter1D:
         self.x_prev = x_hat
         return x_hat
 
+
+class KalmanFilter2D:
+    def __init__(self, process_noise=1e-5, measurement_noise=3e-3):
+        self.kalman = cv2.KalmanFilter(4, 2)
+
+        self.kalman.transitionMatrix = np.array([
+            [1, 0, 1, 0],
+            [0, 1, 0, 1],
+            [0, 0, 1, 0],
+            [0, 0, 0, 1]
+        ], np.float32)
+
+        self.kalman.measurementMatrix = np.array([
+            [1, 0, 0, 0],
+            [0, 1, 0, 0]
+        ], np.float32)
+
+        self.kalman.processNoiseCov = np.eye(4, dtype=np.float32) * process_noise
+        self.kalman.measurementNoiseCov = np.eye(2, dtype=np.float32) * measurement_noise
+        self.kalman.errorCovPost = np.eye(4, dtype=np.float32)
+
+        self.initialized = False
+
+    def reset(self):
+        self.initialized = False
+
+    def apply(self, x, y):
+        measurement = np.array([[np.float32(x)], [np.float32(y)]])
+
+        if not self.initialized:
+            self.kalman.statePost = np.array([
+                [np.float32(x)],
+                [np.float32(y)],
+                [0],
+                [0]
+            ], np.float32)
+            self.initialized = True
+
+        self.kalman.predict()
+        corrected = self.kalman.correct(measurement)
+
+        return float(corrected[0, 0]), float(corrected[1, 0])
+
+
 # Filtros para nariz (x,y) en normalizado 0..1
 # Valores recomendados:
 # - min_cutoff más alto = más estable, pero más "pesado"
 # - beta más alto = reacciona mejor a movimientos rápidos (menos lag)
 NOSE_FILTER_X = OneEuroFilter1D(min_cutoff=1.4, beta=0.05, d_cutoff=1.0)
 NOSE_FILTER_Y = OneEuroFilter1D(min_cutoff=1.4, beta=0.05, d_cutoff=1.0)
+NOSE_KALMAN = KalmanFilter2D(
+    process_noise=8e-5,
+    measurement_noise=8e-4
+)
 
 
 # - Círculo de AutoClick
@@ -535,7 +695,8 @@ def do_click():
     suspend_move_until = time.time() + SUSPEND_MOVE_SEC
 
     try:
-        cursor_overlay.hide()
+        if cursor_overlay:
+            cursor_overlay.hide()
     except:
         pass
 
@@ -544,7 +705,8 @@ def do_click():
     time.sleep(0.03)
 
     try:
-        cursor_overlay.show()
+        if cursor_overlay:
+            cursor_overlay.show()
     except:
         pass
 
@@ -555,7 +717,8 @@ def do_right_click():
     suspend_move_until = time.time() + SUSPEND_MOVE_SEC
 
     try:
-        cursor_overlay.hide()
+        if cursor_overlay:
+            cursor_overlay.hide()
     except:
         pass
 
@@ -564,7 +727,8 @@ def do_right_click():
     time.sleep(0.03)
 
     try:
-        cursor_overlay.show()
+        if cursor_overlay:
+            cursor_overlay.show()
     except:
         pass
 
@@ -594,7 +758,8 @@ def do_double_click():
     suspend_move_until = time.time() + SUSPEND_MOVE_SEC
 
     try:
-        cursor_overlay.hide()
+        if cursor_overlay:
+            cursor_overlay.hide()
     except:
         pass
 
@@ -605,7 +770,8 @@ def do_double_click():
     time.sleep(0.03)
 
     try:
-        cursor_overlay.show()
+        if cursor_overlay:
+            cursor_overlay.show()
     except:
         pass
 
@@ -935,26 +1101,50 @@ def detect_gesture(lm, ratio_raw, now):
 
     mouth_open_prev = opened
 
+    # # ===== Ojos =====
+    # left = eye_aspect_ratio(lm, LEFT_EYE_IDX)
+    # right = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
+    # last_left_ear = left
+    # last_right_ear = right
+
+    # left_closed = left < LEFT_EYE_CLOSED_THR
+    # right_closed = right < RIGHT_EYE_CLOSED_THR
+    # left_open = left > LEFT_EYE_OPEN_THR
+    # right_open = right > RIGHT_EYE_OPEN_THR
+
+    # if left_closed and right_open:
+    #     if (now - last_wink_time) > WINK_COOLDOWN:
+    #         last_wink_time = now
+    #         return "wink_left"
+
+    # if right_closed and left_open:
+    #     if (now - last_wink_time) > WINK_COOLDOWN:
+    #         last_wink_time = now
+    #         return "wink_right"
+
+    # return None
     # ===== Ojos =====
     left = eye_aspect_ratio(lm, LEFT_EYE_IDX)
     right = eye_aspect_ratio(lm, RIGHT_EYE_IDX)
     last_left_ear = left
     last_right_ear = right
 
-    left_closed = left < LEFT_EYE_CLOSED_THR
-    right_closed = right < RIGHT_EYE_CLOSED_THR
-    left_open = left > LEFT_EYE_OPEN_THR
-    right_open = right > RIGHT_EYE_OPEN_THR
+    # Diferencia entre ojos
+    eye_diff = abs(left - right)
 
-    if left_closed and right_open:
+    # Ajustá este valor si detecta poco o demasiado
+    WINK_DIFF_THR = 0.05
+
+    if eye_diff > WINK_DIFF_THR:
         if (now - last_wink_time) > WINK_COOLDOWN:
             last_wink_time = now
-            return "wink_left"
 
-    if right_closed and left_open:
-        if (now - last_wink_time) > WINK_COOLDOWN:
-            last_wink_time = now
-            return "wink_right"
+            print(f"[WINK DETECTADO] L={left:.3f} R={right:.3f} diff={eye_diff:.3f}")
+
+            if left < right:
+                return "wink_left"
+            else:
+                return "wink_right"
 
     return None
 
@@ -967,8 +1157,9 @@ def open_camera(index):
     if not cap.isOpened():
         print(f"[ERROR] No se pudo abrir cámara {index}")
         return None
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    cap.set(cv2.CAP_PROP_FPS, 60)
     print(f"[INFO] Cámara abierta en índice {index}")
     return cap
 
@@ -1007,9 +1198,12 @@ def on_press(key):
             print(f"[HOTKEY] F8 -> autoclick {'ON' if DWELL_ENABLED else 'OFF'}")
             dwell_progress = 0.0
             if DWELL_ENABLED:
-                cursor_overlay.show()
+                if cursor_overlay:
+                    cursor_overlay.show()
             else:
-                cursor_overlay.hide()
+                if cursor_overlay:
+                    cursor_overlay.hide()
+
 
         elif key == keyboard.Key.f7:
             center_mouse()
@@ -1106,7 +1300,15 @@ while RUNNING:
 
     if res.multi_face_landmarks:
         lm = res.multi_face_landmarks[0].landmark
-        nose = lm[1]
+        if CONTROL_POINT == "entrecejo":
+            p1 = lm[168]   # zona entre cejas / centro frente
+            p2 = lm[6]     # centro superior nariz
+            nx = (p1.x + p2.x) / 2
+            ny = (p1.y + p2.y) / 2
+        else:
+            nose = lm[1]
+            nx = float(nose.x)
+            ny = float(nose.y)
 
         # Boca suavizada (solo visual y freno)
         ratio_raw = mouth_open_ratio(lm)
@@ -1133,11 +1335,10 @@ while RUNNING:
             nose_prev_fy = None
 
         # -------- Nariz: filtro anti temblor --------
-        nx, ny = float(nose.x), float(nose.y)
+        # nx, ny = float(nose.x), float(nose.y)
 
         if STABILIZE:
-            fx = NOSE_FILTER_X.apply(nx, now)
-            fy = NOSE_FILTER_Y.apply(ny, now)
+            fx, fy = NOSE_KALMAN.apply(nx, ny)
         else:
             # solo EMA liviano
             if nose_prev_fx is None:
@@ -1174,9 +1375,19 @@ while RUNNING:
             dny = fy - nose_prev_fy
 
             # ✅ Zona muerta en normalizado (anti jitter real)
-            if abs(dnx) < NOSE_DEADZONE_NORM:
+            dynamic_deadzone = NOSE_DEADZONE_NORM
+
+            # Si está intentando hacer click con boca, congelamos más el mouse
+            if ratio_raw >= SLOW_START_RATIO:
+                dynamic_deadzone = max(dynamic_deadzone, 0.004)
+
+            eye_diff_now = abs(last_left_ear - last_right_ear)
+            if eye_diff_now >= 0.04:
+                dynamic_deadzone = max(dynamic_deadzone, 0.003)
+
+            if abs(dnx) < dynamic_deadzone:
                 dnx = 0.0
-            if abs(dny) < NOSE_DEADZONE_NORM:
+            if abs(dny) < dynamic_deadzone:
                 dny = 0.0
 
             # ✅ “leak” para frenar micro-drift
@@ -1208,7 +1419,7 @@ while RUNNING:
 
                 # ✅ deadzone en píxeles final
                 if abs(target_x - cur_x) >= DEAD_ZONE or abs(target_y - cur_y) >= DEAD_ZONE:
-                    pyautogui.moveTo(target_x, target_y, duration=0.01)
+                    pyautogui.moveTo(target_x, target_y)
                     cur_x, cur_y = target_x, target_y
 
                     now_pos = pyautogui.position()
@@ -1257,6 +1468,7 @@ while RUNNING:
 
                                 NOSE_FILTER_X.reset()
                                 NOSE_FILTER_Y.reset()
+                                NOSE_KALMAN.reset()
                                 nose_prev_fx = None
                                 nose_prev_fy = None
 
@@ -1372,13 +1584,14 @@ while RUNNING:
             )
             last_debug_print = now
 
-        cursor_pos = pyautogui.position()
-        test_progress = dwell_progress if DWELL_ENABLED else 0.25
-        if DWELL_ENABLED:
-            cursor_overlay.show()
-            cursor_overlay.update_overlay(cursor_pos[0], cursor_pos[1], dwell_progress)
+        if SHOW_CURSOR_DWELL_OVERLAY and DWELL_ENABLED:
+            cursor_pos = pyautogui.position()
+            if cursor_overlay:
+                cursor_overlay.show()
+                cursor_overlay.update_overlay(cursor_pos[0], cursor_pos[1], dwell_progress)
         else:
-            cursor_overlay.hide()   
+            if cursor_overlay:
+                cursor_overlay.hide()
     
     cv2.imshow("Face Mouse", frame)
 
