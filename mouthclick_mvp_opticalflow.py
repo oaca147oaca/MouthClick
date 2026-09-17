@@ -12,6 +12,7 @@ import numpy as np
 import pyautogui
 import tkinter as tk
 from tkinter import ttk
+from mouthclick_ui import Menu, field, toggle, hint, style_floating, draw_status, ActionsBubble
 from pynput import keyboard
 import winsound
 
@@ -162,43 +163,12 @@ def get_camera_options():
 
 
 def show_gui_menu():
+    window = tk.Tk()
     profiles = load_profiles()
     if not profiles:
         profiles = {"Default": DEFAULT_PROFILE.copy()}
-
-    window = tk.Tk()
-    window.title("MouthClick MVP - Optical Flow")
-    window.resizable(False, False)
-
-    # Ventana con scroll para pantallas chicas
-    outer = ttk.Frame(window)
-    outer.pack(fill="both", expand=True)
-
-    canvas = tk.Canvas(outer, width=420, height=680, highlightthickness=0)
-    scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-    parent = ttk.Frame(canvas)
-
-    parent.bind(
-        "<Configure>",
-        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
-    )
-
-    canvas.create_window((0, 0), window=parent, anchor="nw")
-    canvas.configure(yscrollcommand=scrollbar.set)
-
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-
-    def _on_mousewheel(event):
-        canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-    canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-    tk.Label(parent, text="MOUTHCLICK MVP", font=("Arial", 16, "bold")).pack(pady=10)
-
     selected_profile = tk.StringVar(value=list(profiles.keys())[0])
     profile_name_var = tk.StringVar(value=selected_profile.get())
-
-    # Variables
     mouth_action_var = tk.StringVar(value="Click izquierdo")
     wink_left_action_var = tk.StringVar(value="Nada")
     wink_right_action_var = tk.StringVar(value="Nada")
@@ -209,139 +179,33 @@ def show_gui_menu():
     dwell_time_var = tk.StringVar(value="2.0")
     wink_diff_sens_var = tk.StringVar(value=DEFAULT_PROFILE["wink_diff_sens"])
     tracking_mode_var = tk.StringVar(value="Punto manual")
-
     cam_names, cam_map = get_camera_options()
     cam_index_var = tk.StringVar(value=cam_names[0] if cam_names else "Cam 0")
-
-    frame_profile = tk.LabelFrame(parent, text="Perfil")
-    frame_profile.pack(fill="x", padx=20, pady=8)
-
-    profile_combo = ttk.Combobox(
-        frame_profile,
-        textvariable=selected_profile,
-        values=list(profiles.keys()),
-        state="readonly"
-    )
-    profile_combo.pack(fill="x", padx=10, pady=4)
-
-    tk.Label(frame_profile, text="Nombre para guardar / nuevo perfil").pack(anchor="w", padx=10)
-    tk.Entry(frame_profile, textvariable=profile_name_var).pack(fill="x", padx=10, pady=4)
-
-    frame_click = tk.LabelFrame(parent, text="Acciones por gesto")
-    frame_click.pack(fill="x", padx=20, pady=8)
-
-    def combo_row(label, var):
-        tk.Label(frame_click, text=label).pack(anchor="w", padx=10)
-        ttk.Combobox(
-            frame_click,
-            textvariable=var,
-            values=AVAILABLE_ACTIONS,
-            state="readonly"
-        ).pack(fill="x", padx=10, pady=4)
-
-    combo_row("Boca", mouth_action_var)
-    combo_row("Guiño izquierdo", wink_left_action_var)
-    combo_row("Guiño derecho", wink_right_action_var)
-
-    frame_wink = tk.LabelFrame(parent, text="Sensibilidad de guiño")
-    frame_wink.pack(fill="x", padx=20, pady=8)
-
-    ttk.Combobox(
-        frame_wink,
-        textvariable=wink_diff_sens_var,
-        values=WINK_DIFF_LEVELS,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=5)
-
-    tk.Label(
-        frame_wink,
-        text="Más sensible detecta un cierre menor del párpado. Más estricto exige cerrar más el ojo y reduce falsos positivos.",
-        font=("Arial", 9),
-        justify="left",
-        wraplength=360
-    ).pack(anchor="w", padx=10, pady=5)
-
-    frame_cam = tk.LabelFrame(parent, text="Cámara")
-    frame_cam.pack(fill="x", padx=20, pady=8)
-
-    ttk.Combobox(
-        frame_cam,
-        textvariable=cam_index_var,
-        values=cam_names,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=5)
-
-    frame_tracking = tk.LabelFrame(parent, text="Tracking de cursor")
-    frame_tracking.pack(fill="x", padx=20, pady=8)
-
-    ttk.Combobox(
-        frame_tracking,
-        textvariable=tracking_mode_var,
-        values=["Punto manual"],
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=5)
-
-    tk.Label(
-        frame_tracking,
-        text="Al iniciar, hacé click sobre el punto de la cara a seguir.\nRecomendado: entrecejo, nariz, ceja o pómulo.",
-        font=("Arial", 9),
-        justify="left"
-    ).pack(anchor="w", padx=10, pady=5)
-
-    frame_sens = tk.LabelFrame(parent, text="Sensibilidad")
-    frame_sens.pack(fill="x", padx=20, pady=8)
-
-    tk.Label(frame_sens, text="Eje X").pack(anchor="w", padx=10)
-    ttk.Combobox(
-        frame_sens,
-        textvariable=sens_x_var,
-        values=SENS_LEVELS,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=4)
-
-    tk.Label(frame_sens, text="Eje Y").pack(anchor="w", padx=10)
-    ttk.Combobox(
-        frame_sens,
-        textvariable=sens_y_var,
-        values=SENS_LEVELS,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=4)
-
-    frame_stab = tk.LabelFrame(parent, text="Estabilización")
-    frame_stab.pack(fill="x", padx=20, pady=8)
-
-    tk.Checkbutton(
-        frame_stab,
-        text="Suavizado liviano del punto óptico",
-        variable=stabilize_var
-    ).pack(anchor="w", padx=10, pady=4)
-
-    tk.Checkbutton(
-        frame_stab,
-        text="Zoom automático Windows",
-        variable=zoom_var
-    ).pack(anchor="w", padx=10, pady=4)
-
-    frame_dwell = tk.LabelFrame(parent, text="Autoclick por permanencia")
-    frame_dwell.pack(fill="x", padx=20, pady=8)
-
-    ttk.Combobox(
-        frame_dwell,
-        textvariable=dwell_time_var,
-        values=["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=5)
-
-    tk.Label(
-        parent,
-        text="Hotkeys: F12 salir | F11 pausa | F7 centrar | R re-seleccionar punto | K recalibrar guiño | M ventana | F9 teclado | B burbuja | F5/F6 sens guiño | F8 autoclick",
-        font=("Arial", 9),
-        wraplength=360,
-        justify="center"
-    ).pack(pady=8)
-
     selected_config = {}
-
+    ui = Menu(window)
+    profile = ui.card("Tu perfil")
+    profile_combo = field(profile, "Perfil guardado", selected_profile, list(profiles.keys()))
+    field(profile, "Nombre para guardar / nuevo perfil", profile_name_var)
+    hint(profile, "Tus ajustes se guardan al comenzar el control.")
+    camera = ui.card("Cámara y seguimiento")
+    field(camera, "Cámara", cam_index_var, cam_names)
+    field(camera, "Seguimiento del cursor", tracking_mode_var, ["Punto manual"])
+    hint(camera, "La cámara se inicia al comenzar. Después, elegí un punto de la cara: nariz, entrecejo, ceja o pómulo.")
+    gestures = ui.card("Acciones por gesto")
+    field(gestures, "Boca", mouth_action_var, AVAILABLE_ACTIONS)
+    field(gestures, "Guiño izquierdo", wink_left_action_var, AVAILABLE_ACTIONS)
+    field(gestures, "Guiño derecho", wink_right_action_var, AVAILABLE_ACTIONS)
+    motion = ui.card("Movimiento del cursor")
+    field(motion, "Sensibilidad horizontal · Eje X", sens_x_var, SENS_LEVELS)
+    field(motion, "Sensibilidad vertical · Eje Y", sens_y_var, SENS_LEVELS)
+    toggle(motion, "Suavizado del punto óptico", stabilize_var)
+    wink = ui.card("Precisión del guiño")
+    field(wink, "Sensibilidad del guiño", wink_diff_sens_var, WINK_DIFF_LEVELS)
+    hint(wink, "Más sensible detecta un cierre menor. Más estricto exige cerrar más el ojo y reduce falsos positivos.")
+    aids = ui.card("Ayudas de acceso")
+    field(aids, "Tiempo de autoclick · segundos", dwell_time_var, ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"])
+    toggle(aids, "Zoom automático de Windows", zoom_var)
+    hint(aids, "F8 activa o desactiva el autoclick durante el uso.")
     def apply_profile(profile_name):
         p = normalize_profile(profiles.get(profile_name, DEFAULT_PROFILE))
         profile_name_var.set(profile_name)
@@ -365,9 +229,6 @@ def show_gui_menu():
 
     def on_profile_selected(_event=None):
         apply_profile(selected_profile.get())
-
-    profile_combo.bind("<<ComboboxSelected>>", on_profile_selected)
-    apply_profile(selected_profile.get())
 
     def start():
         name = profile_name_var.get().strip() or "Default"
@@ -394,21 +255,16 @@ def show_gui_menu():
         window.quit()
         window.destroy()
 
-    tk.Button(
-        parent,
-        text="COMENZAR",
-        font=("Arial", 14, "bold"),
-        command=start,
-        bg="#4CAF50",
-        fg="white"
-    ).pack(pady=18)
-
+    profile_combo.bind("<<ComboboxSelected>>", on_profile_selected)
+    apply_profile(selected_profile.get())
+    ui.finish(start, "F11: pausa / continuar · F12: salir · Esc / F10: liberar entradas\nF7: centrar · R: elegir punto · K: recalibrar guiño\nF9: teclado · B: accesos rápidos · M: ventana\nF1/F2: sensibilidad Y · F3/F4: sensibilidad X · F5/F6: sensibilidad del guiño")
     window.mainloop()
 
     if not selected_config:
         selected_config.update(normalize_profile(profiles.get(selected_profile.get(), DEFAULT_PROFILE)))
 
     return selected_config
+
 
 
 CONFIG = show_gui_menu()
@@ -462,7 +318,7 @@ DWELL_ENABLED = False
 SHOW_OVERLAY = True
 WINDOW_NAME = "Face Mouse"
 WINDOW_FULLSCREEN = False
-FLOATING_KEYBOARD_VISIBLE = True
+FLOATING_KEYBOARD_VISIBLE = False
 floating_keyboard_root = None
 floating_keyboard_buffer_var = None
 floating_keyboard_shift = False
@@ -1172,16 +1028,6 @@ def create_quick_actions_bubble():
     if floating_keyboard_root is None:
         return None
     try:
-        root = tk.Toplevel(floating_keyboard_root)
-        root.title("MouthClick Acciones")
-        root.geometry(geometry_at_pos(58, 58, floating_actions_pos, y_bias=-330))
-        root.resizable(False, False)
-        root.overrideredirect(True)
-        root.attributes("-topmost", True)
-        root.configure(bg="#111827")
-        root.protocol("WM_DELETE_WINDOW", toggle_floating_actions)
-        drag_state = {"x": 0, "y": 0}
-
         items = [
             ("Esc", lambda: None if keyboard_debounced("bubble:esc") else release_all_inputs(close_context_menu=True)),
             ("Click", lambda: None if keyboard_debounced("bubble:click") else do_click()),
@@ -1191,78 +1037,21 @@ def create_quick_actions_bubble():
             ("Calib", reset_wink_calibration),
             ("Centro", center_mouse),
         ]
-
-        collapsed = {"value": True}
-        buttons = []
-
-        def remember_pos():
+        def remember_pos(x, y):
             global floating_actions_pos
-            floating_actions_pos = (root.winfo_x(), root.winfo_y())
+            floating_actions_pos = (x, y)
 
-        def collapse_now():
-            if collapsed["value"]:
-                return
-            collapsed["value"] = True
-            for btn in buttons:
-                btn.place_forget()
-            remember_pos()
-            root.geometry(geometry_at_pos(58, 58, floating_actions_pos))
-            bubble.place(x=4, y=4, width=50, height=50)
-
-        def schedule_collapse(_event=None):
+        def schedule_collapse():
             global floating_actions_collapse_after
             floating_actions_collapse_after = time.time() + 0.9
 
-        def expand(_event=None):
+        def cancel_collapse():
             global floating_actions_collapse_after
             floating_actions_collapse_after = 0.0
-            if not collapsed["value"]:
-                return
-            collapsed["value"] = False
-            remember_pos()
-            root.geometry(geometry_at_pos(420, 136, floating_actions_pos))
-            bubble.place(x=181, y=43, width=58, height=50)
-            positions = [(12, 12), (100, 12), (260, 12), (348, 12), (12, 86), (168, 86), (324, 86)]
-            for btn, pos in zip(buttons, positions):
-                btn.place(x=pos[0], y=pos[1], width=78, height=38)
 
-        def start_move(event):
-            expand()
-            drag_state["x"] = event.x_root - root.winfo_x()
-            drag_state["y"] = event.y_root - root.winfo_y()
-
-        def do_move(event):
-            root.geometry(f"+{event.x_root - drag_state['x']}+{event.y_root - drag_state['y']}")
-            remember_pos()
-
-        bubble = tk.Button(
-            root,
-            text="☰",
-            command=expand,
-            font=("Arial", 18, "bold"),
-            bg="#111827",
-            fg="#e5e7eb",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=2,
-            highlightbackground="#e5e7eb",
-        )
-        bubble.place(x=4, y=4, width=50, height=50)
-
-        for label, cmd in items:
-            btn = tk.Button(root, text=label, command=cmd, width=8, height=1)
-            btn.bind("<Enter>", expand)
-            btn.bind("<Leave>", schedule_collapse)
-            buttons.append(btn)
-
-        root.bind("<Enter>", expand)
-        root.bind("<Leave>", schedule_collapse)
-        bubble.bind("<Enter>", expand)
-        bubble.bind("<ButtonPress-1>", start_move)
-        bubble.bind("<B1-Motion>", do_move)
-        bubble.bind("<Leave>", schedule_collapse)
-        root.collapse_now = collapse_now
-
+        root = ActionsBubble(floating_keyboard_root, items, floating_actions_pos,
+                             remember_pos, schedule_collapse, cancel_collapse)
+        root.protocol("WM_DELETE_WINDOW", toggle_floating_actions)
         make_window_no_activate(root, remember_as_keyboard=False)
         floating_actions_root = root
         if not FLOATING_ACTIONS_VISIBLE:
@@ -1273,11 +1062,14 @@ def create_quick_actions_bubble():
         return None
 
 
+
 def create_floating_keyboard():
     global floating_keyboard_root, floating_keyboard_buffer_var
     try:
         style = keyboard_style()
         root = tk.Tk()
+        if not FLOATING_KEYBOARD_VISIBLE:
+            root.withdraw()
         root.title("MouthClick Teclado")
         root.geometry(centered_geometry(style["w"], style["h"], y_bias=220))
         root.resizable(True, True)
@@ -1390,6 +1182,10 @@ def create_floating_keyboard():
         for label, cmd in action_buttons:
             tk.Button(actions, text=label, command=cmd, height=style["btn_h"]).pack(side="left", padx=2, fill="x", expand=True)
 
+        style_floating(root)
+        root.update_idletasks()
+        root.geometry(centered_geometry(min(root.winfo_screenwidth()-20, max(style["w"], root.winfo_reqwidth())),
+                                        min(root.winfo_screenheight()-60, max(style["h"], root.winfo_reqheight())), y_bias=100))
         make_window_no_activate(root)
         floating_keyboard_root = root
         if not FLOATING_KEYBOARD_VISIBLE:
@@ -1832,6 +1628,7 @@ try:
         if PAUSED:
             cv2.putText(frame, "PAUSA - F11 para continuar", (20, 40),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            draw_status(frame, "PAUSADO · F11 para continuar", "warning")
             cv2.imshow(WINDOW_NAME, frame)
             pause_key = cv2.waitKey(1) & 0xFF
             if pause_key == ord("q"):
@@ -2041,6 +1838,8 @@ try:
             )
             last_debug_print = now
 
+        draw_status(frame, "ELEGIR PUNTO" if SELECTING_POINT else "CONTROL ACTIVO",
+                    "warning" if SELECTING_POINT else "success")
         cv2.imshow(WINDOW_NAME, frame)
         k = cv2.waitKey(1) & 0xFF
 

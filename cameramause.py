@@ -10,6 +10,7 @@ import numpy as np
 import pyautogui
 import tkinter as tk
 from tkinter import ttk
+from mouthclick_ui import Menu, field, toggle, hint, style_floating
 from collections import deque
 from pynput import keyboard
 import ctypes
@@ -147,99 +148,34 @@ AVAILABLE_ACTIONS = [
 
 def show_gui_menu():
     window = tk.Tk()
-    window.title("Configuración FaceMouse")
-    window.resizable(False, False)
-
     zoom_var = tk.BooleanVar(value=False)
     sensitivity_var = tk.StringVar(value="alta")
     stabilize_var = tk.BooleanVar(value=False)
     movement_point_var = tk.StringVar(value="Punta de nariz")
     dwell_time_var = tk.StringVar(value="2.0")
-
     mouth_action_var = tk.StringVar(value="Click izquierdo")
     wink_left_action_var = tk.StringVar(value="Nada")
     wink_right_action_var = tk.StringVar(value="Nada")
-
     cam_names, cam_map = get_camera_options()
     default_cam = cam_names[1] if cam_names else "Cam 0"
     cam_index_var = tk.StringVar(value=default_cam)
-
-
-    tk.Label(window, text="FACE MOUSE CONTROL", font=("Arial", 18, "bold")).grid(
-        row=0, column=0, columnspan=2, pady=12
-    )
-
-    left_col = tk.Frame(window)
-    left_col.grid(row=1, column=0, padx=15, pady=5, sticky="n")
-
-    right_col = tk.Frame(window)
-    right_col.grid(row=1, column=1, padx=15, pady=5, sticky="n")
-
-    # IZQUIERDA: acciones
-    frame_click = tk.LabelFrame(left_col, text="Acciones por gesto")
-    frame_click.pack(fill="x", pady=8)
-
-    tk.Label(frame_click, text="Boca").pack(anchor="w", padx=10)
-    ttk.Combobox(frame_click, textvariable=mouth_action_var,
-                 values=AVAILABLE_ACTIONS, state="readonly", width=28).pack(padx=10, pady=4)
-
-    tk.Label(frame_click, text="Guiño izquierdo").pack(anchor="w", padx=10)
-    ttk.Combobox(frame_click, textvariable=wink_left_action_var,
-                 values=AVAILABLE_ACTIONS, state="readonly", width=28).pack(padx=10, pady=4)
-
-    tk.Label(frame_click, text="Guiño derecho").pack(anchor="w", padx=10)
-    ttk.Combobox(frame_click, textvariable=wink_right_action_var,
-                 values=AVAILABLE_ACTIONS, state="readonly", width=28).pack(padx=10, pady=4)
-
-    frame_dwell = tk.LabelFrame(left_col, text="Tiempo de autoclick")
-    frame_dwell.pack(fill="x", pady=8)
-
-    ttk.Combobox(frame_dwell, textvariable=dwell_time_var,
-                 values=["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
-                 state="readonly", width=28).pack(padx=10, pady=8)
-
-    # DERECHA: cámara/config
-    frame_cam = tk.LabelFrame(right_col, text="Cámara")
-    frame_cam.pack(fill="x", pady=8)
-
-    ttk.Combobox(frame_cam, textvariable=cam_index_var,
-                 values=cam_names, state="readonly", width=28).pack(padx=10, pady=8)
-
-    frame_point = tk.LabelFrame(right_col, text="Punto de movimiento")
-    frame_point.pack(fill="x", pady=8)
-
-    ttk.Combobox(frame_point, textvariable=movement_point_var,
-                 values=["Punta de nariz", "Centro de cejas"],
-                 state="readonly", width=28).pack(padx=10, pady=8)
-
-    frame_sens = tk.LabelFrame(right_col, text="Sensibilidad")
-    frame_sens.pack(fill="x", pady=8)
-
-    ttk.Combobox(frame_sens, textvariable=sensitivity_var,
-                 values=["baja", "media-baja", "media", "media-alta", "alta"],
-                 state="readonly", width=28).pack(padx=10, pady=8)
-
-    frame_stab = tk.LabelFrame(right_col, text="Estabilización")
-    frame_stab.pack(fill="x", pady=8)
-
-    tk.Checkbutton(frame_stab, text="Activar anti-temblor",
-                   variable=stabilize_var).pack(anchor="w", padx=10, pady=8)
-
-    frame_zoom = tk.LabelFrame(right_col, text="Zoom automático")
-    frame_zoom.pack(fill="x", pady=8)
-
-    tk.Checkbutton(frame_zoom, text="Activar zoom en modo preciso/lento",
-                   variable=zoom_var).pack(anchor="w", padx=10, pady=8)
-
-    hint = tk.Label(
-        window,
-        text="F3/F4 sensibilidad | F7 centrar | F8 autoclick | F9 recalibrar guiño | F10 drag | F11 pausa | F12 salir",
-        font=("Arial", 9)
-    )
-    hint.grid(row=2, column=0, columnspan=2, pady=8)
-
     started = {"value": False}
-
+    ui = Menu(window)
+    frame_click = ui.card("Acciones por gesto")
+    field(frame_click, "Boca", mouth_action_var, AVAILABLE_ACTIONS)
+    field(frame_click, "Guiño izquierdo", wink_left_action_var, AVAILABLE_ACTIONS)
+    field(frame_click, "Guiño derecho", wink_right_action_var, AVAILABLE_ACTIONS)
+    camera = ui.card("Cámara y seguimiento")
+    field(camera, "Cámara", cam_index_var, cam_names)
+    hint(camera, "La cámara se inicia al comenzar el control.")
+    field(camera, "Punto de movimiento", movement_point_var, ["Punta de nariz", "Centro de cejas"])
+    motion = ui.card("Movimiento del cursor")
+    field(motion, "Sensibilidad", sensitivity_var, ["baja", "media-baja", "media", "media-alta", "alta"], readonly=True)
+    toggle(motion, "Activar estabilización / anti-temblor", stabilize_var)
+    hint(motion, "Si el movimiento queda lento, desactivá la estabilización o subí la sensibilidad.")
+    aids = ui.card("Ayudas de acceso")
+    field(aids, "Tiempo de autoclick · segundos", dwell_time_var, ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"])
+    toggle(aids, "Zoom automático en modo preciso", zoom_var)
     def start():
         started["value"] = True
         window.destroy()
@@ -248,19 +184,8 @@ def show_gui_menu():
         started["value"] = False
         window.destroy()
 
-    tk.Button(
-    window,
-    text="COMENZAR",
-    font=("Arial", 14, "bold"),
-    command=start,
-    bg="#4CAF50",
-    fg="white"
-    ).grid(row=3, column=0, columnspan=2, pady=14)
-
-    
-
     window.protocol("WM_DELETE_WINDOW", on_close)
-
+    ui.finish(start, "F11: pausa / continuar · F12: salir · F7: centrar\nF8: autoclick · F9: recalibrar guiño · F10: arrastrar\nF3/F4: sensibilidad · F5/F6: sensibilidad del guiño")
     window.mainloop()
 
     if not started["value"]:
@@ -279,6 +204,7 @@ def show_gui_menu():
         float(dwell_time_var.get()),
         movement_point_var.get()
     )
+
 
 menu_result = show_gui_menu()
 

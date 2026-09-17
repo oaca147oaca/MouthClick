@@ -10,6 +10,7 @@ import numpy as np
 import pyautogui
 import tkinter as tk
 from tkinter import ttk
+from mouthclick_ui import Menu, field, toggle, hint, style_floating
 from collections import deque
 from pynput import keyboard
 import ctypes
@@ -184,45 +185,39 @@ def save_profiles(profiles):
 
 def show_gui_menu():
     window = tk.Tk()
-    window.title("Configuración FaceMouse")
-    window.resizable(False, False)
     zoom_var = tk.BooleanVar(value=False)
-
-    # Tamaño automático según contenido (anti cortes)
-    window.update_idletasks()
-    window.geometry("")
     profiles = load_profiles()
     selected_profile = tk.StringVar(value=list(profiles.keys())[0])
-
     click_mode_var = tk.StringVar(value="mouth")
     sensitivity_var = tk.StringVar(value="alta")
     stabilize_var = tk.BooleanVar(value=False)  # ✅ nuevo
-
-    title = tk.Label(window, text="FACE MOUSE CONTROL", font=("Arial", 16, "bold"))
-    title.pack(pady=10)
-
-    frame_profile = tk.LabelFrame(window, text="Perfil")
-    frame_profile.pack(fill="x", padx=20, pady=10)
-
-    profile_combo = ttk.Combobox(
-        frame_profile,
-        textvariable=selected_profile,
-        values=list(profiles.keys()),
-        state="readonly"
-    )
-
-    profile_combo.pack(fill="x", padx=10, pady=5)
-
-
     mouth_action_var = tk.StringVar(value="Click izquierdo")
     wink_left_action_var = tk.StringVar(value="Nada")
     wink_right_action_var = tk.StringVar(value="Nada")
-
-    frame_click = tk.LabelFrame(window, text="Acciones por gesto")
-    frame_click.pack(fill="x", padx=20, pady=10)
-
     dwell_time_var = tk.StringVar(value="2.0")
-
+    cam_names, cam_map = get_camera_options()
+    default_cam = cam_names[0] if cam_names else "Cam 0"
+    cam_index_var = tk.StringVar(value=default_cam)
+    control_point_var = tk.StringVar(value="nariz")
+    ui = Menu(window)
+    frame_click = ui.card("Acciones por gesto")
+    field(frame_click, "Boca", mouth_action_var, AVAILABLE_ACTIONS)
+    field(frame_click, "Guiño izquierdo", wink_left_action_var, AVAILABLE_ACTIONS)
+    field(frame_click, "Guiño derecho", wink_right_action_var, AVAILABLE_ACTIONS)
+    profile = ui.card("Tu perfil")
+    profile_combo = field(profile, "Perfil guardado", selected_profile, list(profiles.keys()))
+    hint(profile, "Tus ajustes se guardan al comenzar el control.")
+    camera = ui.card("Cámara y seguimiento")
+    field(camera, "Cámara", cam_index_var, cam_names)
+    hint(camera, "La cámara se inicia al comenzar el control.")
+    field(camera, "Punto de control", control_point_var, ["nariz", "entrecejo"])
+    motion = ui.card("Movimiento del cursor")
+    field(motion, "Sensibilidad", sensitivity_var, ["baja", "media-baja", "media", "media-alta", "alta"], readonly=False)
+    toggle(motion, "Activar estabilización / anti-temblor", stabilize_var)
+    hint(motion, "Si el movimiento queda lento, desactivá la estabilización o subí la sensibilidad.")
+    aids = ui.card("Ayudas de acceso")
+    field(aids, "Tiempo de autoclick · segundos", dwell_time_var, ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"])
+    toggle(aids, "Zoom automático en modo preciso", zoom_var)
     def apply_profile(profile_name):
         p = profiles.get(profile_name, DEFAULT_PROFILE)
 
@@ -245,67 +240,8 @@ def show_gui_menu():
                 cam_index_var.set(k)
                 break
 
-
-    tk.Label(frame_click, text="Boca").pack(anchor="w", padx=10)
-    ttk.Combobox(
-        frame_click,
-        textvariable=mouth_action_var,
-        values=AVAILABLE_ACTIONS,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=4)
-
-    tk.Label(frame_click, text="Guiño izquierdo").pack(anchor="w", padx=10)
-    ttk.Combobox(
-        frame_click,
-        textvariable=wink_left_action_var,
-        values=AVAILABLE_ACTIONS,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=4)
-
-    tk.Label(frame_click, text="Guiño derecho").pack(anchor="w", padx=10)
-    ttk.Combobox(
-        frame_click,
-        textvariable=wink_right_action_var,
-        values=AVAILABLE_ACTIONS,
-        state="readonly"
-    ).pack(fill="x", padx=10, pady=4)
-
-
-
-    frame_cam = tk.LabelFrame(window, text="Índice de cámara")
-    frame_cam.pack(fill="x", padx=20, pady=10)
-
-    cam_names, cam_map = get_camera_options()
-
-    default_cam = cam_names[0] if cam_names else "Cam 0"
-    cam_index_var = tk.StringVar(value=default_cam)
-
-    ttk.Combobox(
-        frame_cam,
-        textvariable=cam_index_var,
-        values=cam_names,
-        state="readonly"
-    ).pack(padx=10, pady=5)
-
-    frame_sens = tk.LabelFrame(window, text="Sensibilidad")
-    frame_sens.pack(fill="x", padx=20, pady=10)
-
-    ttk.Combobox(frame_sens, textvariable=sensitivity_var,
-                 values=["baja","media-baja", "media", "media-alta", "alta"]).pack(padx=10, pady=5)
-
-    # ✅ Nuevo: Estabilización
-    frame_stab = tk.LabelFrame(window, text="Estabilización (anti-temblor)")
-    frame_stab.pack(fill="x", padx=20, pady=10)
-
-    tk.Checkbutton(frame_stab, text="Activar estabilización de nariz (recomendado para pacientes)",
-                   variable=stabilize_var).pack(anchor="w", padx=10, pady=5)
-
-    hint = tk.Label(window,
-                    text="Tip: Si queda muy 'lento', desactivá estabilización o subí sensibilidad.\n"
-                         "Durante click por boca, el mouse se frena automáticamente.",
-                    font=("Arial", 9))
-    hint.pack(pady=5)
-
+    apply_profile(selected_profile.get())
+    profile_combo.bind("<<ComboboxSelected>>", lambda e: apply_profile(selected_profile.get()))
     def start():
         profiles[selected_profile.get()] = {
             "mouth": mouth_action_var.get(),
@@ -323,49 +259,7 @@ def show_gui_menu():
 
         window.destroy()
 
-    frame_zoom = tk.LabelFrame(window, text="Zoom automático")
-    frame_zoom.pack(fill="x", padx=20, pady=10)
-
-    tk.Checkbutton(
-        frame_zoom,
-        text="Activar zoom al entrar en modo preciso/lento",
-        variable=zoom_var
-    ).pack(anchor="w", padx=10, pady=5)
-
-
-    frame_point = tk.LabelFrame(window, text="Punto de control")
-    frame_point.pack(fill="x", padx=20, pady=10)
-
-    control_point_var = tk.StringVar(value="nariz")
-
-    apply_profile(selected_profile.get())
-
-    profile_combo.bind(
-        "<<ComboboxSelected>>",
-        lambda e: apply_profile(selected_profile.get())
-    )
-
-    ttk.Combobox(
-        frame_point,
-        textvariable=control_point_var,
-        values=["nariz", "entrecejo"],
-        state="readonly"
-    ).pack(padx=10, pady=5)
-
-    tk.Button(window, text="COMENZAR", font=("Arial", 14, "bold"),
-              command=start, bg="#4CAF50", fg="white").pack(pady=18)
-
-
-    frame_dwell = tk.LabelFrame(window, text="Tiempo de autoclick")
-    frame_dwell.pack(fill="x", padx=20, pady=10)
-
-    ttk.Combobox(
-        frame_dwell,
-        textvariable=dwell_time_var,
-        values=["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"],
-        state="readonly"
-    ).pack(padx=10, pady=5)
-
+    ui.finish(start, "F11: pausa / continuar · F12: salir · F7: centrar\nF8: autoclick · F9: recalibrar guiño · F10: arrastrar\nF3/F4: sensibilidad · F5/F6: sensibilidad del guiño")
     window.mainloop()
 
     return (
@@ -381,6 +275,7 @@ def show_gui_menu():
     float(dwell_time_var.get()),
     control_point_var.get()
 )
+
     
 
 GESTURE_ACTIONS, CAMERA_INDEX, SENS, STABILIZE, AUTO_ZOOM_ENABLED, DWELL_CLICK_SEC, CONTROL_POINT = show_gui_menu()
