@@ -3,3 +3,9 @@ build
 __pycache__
 *.spec
 .visual-build/
+
+# Local installers and portable packages; never add to source history.
+/Entregas/
+/Release/*.exe
+/Release/*.zip
+/installer/

@@ -17,8 +17,8 @@ DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 MinVersion=10.0
 
-OutputDir=installer
-OutputBaseFilename=MouthClick_Setup
+OutputDir=Entregas
+OutputBaseFilename=MouthClick_Setup_v{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
