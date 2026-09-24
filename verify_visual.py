@@ -77,7 +77,7 @@ def run(source, name, select=False, size=None, scale=None, capture=False):
                 for index in range(len(menu.pages)):
                     menu.show_page(index)
                     root.update()
-                    for card in menu.cards[index*2:index*2+2]:
+                    for card in menu.cards[index*4:index*4+4]:
                         for control in card.body.winfo_children():
                             assert control.winfo_rooty()+control.winfo_height()<=menu.content.winfo_rooty()+menu.content.winfo_height(), (size,scale,index,control)
                 menu.show_page(0)

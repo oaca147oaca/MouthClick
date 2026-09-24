@@ -58,11 +58,17 @@ class RuntimeTests(unittest.TestCase):
         fake = Mock(wraps=cv2)
         app["cv2"] = fake
         for i in range(100):
-            delta = .24 if i%2 else -.24
+            delta = .16 if i%2 else -.16
             point = app["tracking_point"]+np.array([[[delta,delta]]],np.float32)
             fake.calcOpticalFlowPyrLK.return_value=(point,np.array([[1]]),None)
             app["update_optical_tracking"](app["current_gray_frame"],time.time())
         app["pyautogui"].moveTo.assert_not_called()
+        # A deliberate small movement now passes instead of the previous strong damping.
+        point = app["tracking_point"]+np.array([[[.24,.24]]],np.float32)
+        fake.calcOpticalFlowPyrLK.return_value=(point,np.array([[1]]),None)
+        app["update_optical_tracking"](app["current_gray_frame"],time.time())
+        app["pyautogui"].moveTo.assert_called_once()
+        app["pyautogui"].moveTo.reset_mock()
         point = app["tracking_point"]+np.array([[[1.,1.]]],np.float32)
         fake.calcOpticalFlowPyrLK.return_value=(point,np.array([[1]]),None)
         app["update_optical_tracking"](app["current_gray_frame"],time.time())

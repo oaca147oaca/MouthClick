@@ -58,6 +58,14 @@ try:
         panel.show_page(0)
         panel.vars["gain_x"].set("88.5")
         assert app["REL_GAIN_X"]==88.5
+        assert panel.level_vars['gain_x'].get()=='Personalizada'
+        panel.show_page(2)
+        panel.show_page(0)
+        assert app['REL_GAIN_X']==88.5
+        panel.level_vars['gain_x'].set('alta')
+        panel.select_level('gain_x')
+        assert app['REL_GAIN_X']==74.0
+        panel.vars['gain_x'].set('88.5')
         panel.vars["face_point"].set("Pera / mentón")
         assert app["FACE_POINT"]=="Pera / mentón"
         panel.vars["gain_y"].set("not a number")
@@ -163,6 +171,6 @@ try:
     menu.destroy()
     done.assert_called_once()
     assert not errors,errors
-    print('PASS: four paired pages, preview, validation, cancel, save and ten bubble actions at 100/125/150%')
+    print('PASS: four-card pages, named levels, fine values preserved, save/cancel, nine bubble actions at 100/125/150%')
 finally:
     root.destroy()

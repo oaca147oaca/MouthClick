@@ -561,7 +561,7 @@ def draw_eye_bar(frame, x, y, width, height, value, closed_thr, open_ear, label,
     frac = max(0.0, min(1.0, value / denom))
     fill_w = int(width * frac)
 
-    color = (0, 255, 255) if active else (180, 220, 255)
+    color = (0, 255, 255) if active else (180, 220, 255)  
     cv2.rectangle(frame, (x, y), (x + fill_w, y + height), color, -1)
 
     # marca de cerrado

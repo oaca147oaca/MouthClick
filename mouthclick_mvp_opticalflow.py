@@ -44,7 +44,7 @@ except Exception:
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0
 
-PROFILES_FILE = "profiles.json"
+PROFILES_FILE = os.path.join(os.path.dirname(sys.executable), "profiles.json") if getattr(sys, "frozen", False) else "profiles.json"
 
 AVAILABLE_ACTIONS = [
     "Nada",
@@ -1174,8 +1174,6 @@ def create_quick_actions_bubble():
         return None
     try:
         items = [
-            ("Click", lambda: None if keyboard_debounced("bubble:click") else do_click()),
-            ("Derecho", lambda: None if keyboard_debounced("bubble:right") else do_right_click()),
             ("Drag", lambda: None if keyboard_debounced("bubble:drag") else toggle_drag_mode()),
             ("Oficina", toggle_office_mode),
             ("Teclado", toggle_floating_keyboard),
@@ -1825,7 +1823,6 @@ def update_optical_tracking(gray, now):
             # Subtract the noise floor smoothly instead of jumping at its edge.
             magnitude = math.hypot(dx_cam,dy_cam)
             noise_scale = max(0.0,1.0-DEADZONE_PX_CAMERA/magnitude) if magnitude else 0.0
-            noise_scale *= noise_scale
             dx_cam *= noise_scale
             dy_cam *= noise_scale
             dx_mouse = dx_cam * REL_GAIN_X * precision_scale

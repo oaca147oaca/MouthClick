@@ -1,10 +1,14 @@
 # MouthClick: controles y atajos
 
-El menú principal se organiza en cinco páginas con Anterior/Siguiente y
+El menú principal se organiza en tres páginas de hasta cuatro tarjetas con Anterior/Siguiente y
 Alt + flecha izquierda/derecha. Perfil y cámara están en la primera; luego
 gestos, movimiento, ayudas y atajos. No requiere desplazamiento con scroll.
 
-El filtro del cursor reduce gradualmente el movimiento cerca del límite de la
+Sensibilidades muestra niveles baja, media, alta, muy alta y extrema para X/Y.
+Ajuste fino X/Y abre los números exactos; Personalizada indica un valor que no
+coincide con un nivel. Abrir o cambiar de página no modifica esos valores.
+
+El filtro del cursor usa una reducción intermedia, lineal, cerca del límite de la
 zona muerta y evita redondear siempre hacia arriba/izquierda. La zona muerta
 existente sigue ajustándose desde Sensibilidades; no se cambiaron los perfiles.
 

@@ -227,6 +227,7 @@ class Menu:
 
 def compact_card(card):
     """Reduce spacing, keeping font sizes and full-width click targets."""
+    ttk.Style(card).configure("Compact.TCombobox", padding=4)
     def visit(parent):
         for widget in parent.winfo_children():
             if widget.winfo_manager() == "pack":
@@ -235,6 +236,8 @@ def compact_card(card):
                     widget.pack_configure(ipady=2)
             if isinstance(widget, tk.Checkbutton):
                 widget.configure(pady=4)
+            if isinstance(widget, ttk.Combobox):
+                widget.configure(style="Compact.TCombobox")
             visit(widget)
     visit(card.body)
 
@@ -248,7 +251,7 @@ class PagedMenu:
         scale = float(window.tk.call("tk", "scaling"))/1.3333
         window.geometry("1080x820")
         window.minsize(min(round(1000*scale),window.winfo_screenwidth()),
-                       min(round(730*scale),window.winfo_screenheight()))
+                       min(round(950*scale),window.winfo_screenheight()))
         header = tk.Frame(window,bg=COLORS["panel"],padx=22,pady=10)
         header.pack(fill="x")
         label(header,"Menú principal",size=22,bold=True).pack(anchor="w")
@@ -277,7 +280,7 @@ class PagedMenu:
         if number%4==0:
             page=tk.Frame(self.content,bg=COLORS["bg"])
             page.columnconfigure((0,1),weight=1,uniform="cards")
-            page.rowconfigure((0,1),weight=1,uniform="rows")
+            page.rowconfigure((0,1),weight=1)
             self.pages.append(page)
         card=Card(self.pages[-1],title,f"{number+1:02}")
         card.grid(row=(number%4)//2,column=number%2,sticky="nsew",padx=(0,8) if number%2==0 else (8,0),pady=5)

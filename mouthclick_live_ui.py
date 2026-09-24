@@ -32,7 +32,7 @@ class LiveSettings(tk.Toplevel):
         self.geometry(f"{width}x{height}")
         scale = float(self.tk.call("tk", "scaling"))/1.3333
         self.minsize(min(round(1000*scale),self.winfo_screenwidth()-40),
-                     min(round(730*scale),self.winfo_screenheight()))
+                     min(round(950*scale),self.winfo_screenheight()))
         self.protocol("WM_DELETE_WINDOW", self.discard)
         self.chrome = WindowChrome(self, self.discard)
         header = tk.Frame(self, bg=COLORS["panel"], padx=20, pady=10)
@@ -119,7 +119,7 @@ class LiveSettings(tk.Toplevel):
         if number % 4 == 0:
             page = tk.Frame(self.content, bg=COLORS["bg"])
             page.columnconfigure((0,1), weight=1, uniform="cards")
-            page.rowconfigure((0,1), weight=1, uniform="rows")
+            page.rowconfigure((0,1), weight=1)
             page.cards = []
             self.pages.append(page)
         page = self.pages[-1]

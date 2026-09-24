@@ -1,5 +1,5 @@
 ﻿#define MyAppName "MouthClick"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "Fundación Teletón"
 #define MyAppExeName "MouthClick.exe"
 #ifndef AppSource
@@ -42,6 +42,7 @@ Source: "{#AppSource}\profiles.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 
 [Icons]
 Name: "{group}\MouthClick"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
+Name: "{group}\Configurar MouthClick"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--config"; WorkingDir: "{app}"
 Name: "{autodesktop}\MouthClick"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 Name: "{userstartup}\MouthClick"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: startup
 

@@ -1,0 +1,12 @@
+MouthClick 1.3.0
+
+Ejecutar MouthClick_Setup_v1.3.0.exe en Windows 10/11 de 64 bits.
+Incluye Python, MediaPipe, OpenCV y las demas dependencias: no hay que instalarlas aparte.
+
+La burbuja ya no incluye Clic izquierdo ni Clic derecho. Las acciones por gesto se conservan.
+Incluye menus por paginas, niveles de sensibilidad y ajuste fino, modos Arrastre y Oficina, perfiles y bloqueo de instancia unica.
+
+Se incluye solo Por Defecto como base, con la primera camara (indice 0).
+Para editar perfiles o elegir otra camara: Configurar MouthClick en el menu Inicio.
+Cerrar la instancia activa antes de abrir Configurar MouthClick.
+Una actualizacion conserva el archivo de perfiles existente.
