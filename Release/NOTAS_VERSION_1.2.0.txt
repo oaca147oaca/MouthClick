@@ -1,0 +1,40 @@
+﻿MOUTHCLICK 1.2.0
+
+NOVEDADES
+- Punto facial persistente: punta de nariz, pera/menton, entrecejo o frente.
+- Deteccion automatica del punto al comenzar y al recuperar la cara.
+- Burbuja > Sensibilidades: probar ajustes en vivo y guardar en el perfil activo.
+- Cerrar sin guardar (o X): restaura los ajustes anteriores a abrir el panel.
+- Sensibilidad horizontal/vertical exacta, guino, umbral de boca, suavizado,
+  zona muerta, autoclick (tiempo y tolerancia), zoom y sonido.
+- Vista de camara oculta por defecto. M muestra/oculta la vista opcional.
+- La camara sigue activa: es necesaria para detectar la cara y los gestos.
+- Sonidos WAV en segundo plano para clic, doble clic, clic derecho y arrastre,
+  incluidos autoclick y acciones de burbuja. Boton Probar sonido en el panel.
+- F11 pausa/continua, F12 sale, F7 centra, R recupera el punto facial.
+
+RENDIMIENTO
+No se dibuja video ni se procesan eventos de OpenCV cuando la vista esta oculta.
+MediaPipe recibe imagenes originales sin textos dibujados.
+Se redujeron copias de imagen y se quitaron logs por fotograma.
+El sonido no bloquea el seguimiento. La cola de audio tiene capacidad limitada.
+Los atajos se procesan en el hilo principal de la interfaz.
+Se mantiene la deteccion refinada de ojos y el procesamiento de cada fotograma
+para no degradar los guinos. No se afirma una mejora porcentual sin medir hardware.
+
+INSTALACION
+Windows 10/11 de 64 bits. No requiere instalar Python.
+Abrir MouthClick_Setup_v1.2.0.exe. Conserva los perfiles existentes al actualizar.
+Los perfiles anteriores adoptan Punta de nariz hasta elegir y guardar otro punto.
+Los archivos del proyecto se pueden abrir con Abrir MouthClick.bat.
+
+VERIFICACION
+16 pruebas automatizadas de perfiles, valores, transacciones, seguimiento y audio.
+Pruebas de UI a escalas 100/125/150%, guardado y descarte con persistencia simulada.
+Arranque y cierre completos con seis imagenes simuladas, sin mover el mouse.
+Pendiente validar seguimiento, volumen audible y fluidez con la camara real.
+
+RESULTADO DEL EMPAQUETADO
+PyInstaller e Inno Setup completados sin errores.
+El ejecutable empaquetado abre la configuracion correctamente.
+325 avisos preexistentes de analisis de modulos; ninguno nuevo respecto a 1.1.0.

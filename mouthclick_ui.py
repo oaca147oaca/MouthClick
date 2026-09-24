@@ -31,6 +31,10 @@ def apply_theme(root):
                     troughcolor=COLORS["bg"], arrowcolor=COLORS["muted"],
                     borderwidth=0, arrowsize=20)
     style.map("Vertical.TScrollbar", background=[("active", COLORS["muted"])])
+    style.configure("TSpinbox", padding=8, arrowsize=22, foreground=COLORS["text"],
+                    fieldbackground=COLORS["input"], background=COLORS["input"],
+                    arrowcolor=COLORS["text"], bordercolor=COLORS["border"])
+    style.map("TSpinbox", bordercolor=[("focus", COLORS["red"])])
 
 
 def label(parent, text, secondary=False, size=11, bold=False, **kwargs):
@@ -120,7 +124,7 @@ def toggle(parent, title, variable):
 
 
 class Menu:
-    def __init__(self, window):
+    def __init__(self, window, title="MouthClick", subtitle="Tecnología de asistencia · Control accesible del computador"):
         self.window = window
         apply_theme(window)
         window.title("MouthClick · Teletón Labs")
@@ -137,8 +141,8 @@ class Menu:
         label(brand, "Teletón", size=14, bold=True).pack(side="left")
         tk.Label(brand, text=" Labs", bg=COLORS["panel"], fg=COLORS["red"],
                  font=(FONT, 14)).pack(side="left")
-        label(header, "MouthClick", size=28, bold=True).pack(anchor="w", pady=(8,0))
-        label(header, "Tecnología de asistencia · Control accesible del computador",
+        label(header, title, size=28, bold=True).pack(anchor="w", pady=(8,0))
+        label(header, subtitle,
               secondary=True, size=10, wraplength=420, justify="left").pack(anchor="w", pady=(3,0))
         self.footer = tk.Frame(window, bg=COLORS["panel"], padx=22, pady=12)
         self.footer.pack(side="bottom", fill="x")
@@ -171,7 +175,8 @@ class Menu:
         if columns != self.columns:
             self.columns = columns
             for col in range(2):
-                self.content.columnconfigure(col, weight=1 if col < columns else 0, uniform="cards")
+                self.content.columnconfigure(col, weight=1 if col < columns else 0,
+                                             uniform="cards" if col < columns else "", minsize=0)
             for i, card in enumerate(self.cards):
                 card.grid(row=i//columns, column=i%columns, sticky="new", padx=12, pady=10)
 
@@ -258,9 +263,10 @@ class ActionsBubble(tk.Toplevel):
         self.attributes("-transparentcolor", "#010203")
         self.remember, self.schedule, self.cancel = remember, schedule, cancel
         self.expanded = False
+        self.panel_height = 170 + 52*((len(items)+2)//2)
         self.factor = max(1.0, float(self.tk.call("tk", "scaling"))/1.3333)
         self.factor = min(self.factor, (self.winfo_screenwidth()-32)/340,
-                          (self.winfo_screenheight()-48)/370)
+                          (self.winfo_screenheight()-48)/self.panel_height)
         self.px = lambda value: round(value*self.factor)
         self.position = position or (self.winfo_screenwidth()-self.px(158)-24, 90)
         self.shell = tk.Canvas(self, bg="#010203", bd=0, highlightthickness=0)
@@ -273,21 +279,27 @@ class ActionsBubble(tk.Toplevel):
         header.pack(fill="x", pady=(0,self.px(10)))
         label(header, "MouthClick", size=14, bold=True).pack(anchor="w")
         label(header, "ACCESOS RÁPIDOS", size=9, secondary=True).pack(anchor="w", pady=(3,0))
+        self.status = label(self.panel, "Buscando cara…", size=9, secondary=True, wraplength=self.px(290), justify="left")
+        self.status.pack(fill="x", pady=(0,6))
         grid = tk.Frame(self.panel, bg=COLORS["card"])
         grid.pack(fill="both", expand=True)
         grid.columnconfigure((0,1), weight=1, uniform="actions")
         titles = {"Esc":"Liberar · Esc", "Click":"Clic izquierdo", "Derecho":"Clic derecho",
-                  "Drag":"Arrastrar", "Teclado":"Teclado", "Calib":"Calibrar guiño", "Centro":"Centrar cursor"}
+                  "Drag":"Arrastrar", "Teclado":"Teclado", "Calib":"Calibrar guiño", "Centro":"Centrar cursor", "Pausa":"Pausar", "Salir":"Salir de la app"}
         self.action_buttons = []
+        self.pause_button = None
         for i, (title, command) in enumerate(items):
-            b = button(grid, titles.get(title,title), command, primary=(title == "Teclado"))
+            b = button(grid, titles.get(title,title), command, primary=(title == "Sensibilidades"))
             b.configure(padx=4, pady=7, font=(FONT,10,"bold"))
             b.grid(row=i//2, column=i%2, sticky="nsew", padx=3, pady=4)
             grid.rowconfigure(i//2, weight=1)
             self.action_buttons.append(b)
+            if title == "Pausa":
+                self.pause_button = b
         close = button(grid, "Contraer  ↑", self.collapse_now)
         close.configure(padx=4, pady=7, font=(FONT,10,"bold"))
-        close.grid(row=3,column=1,sticky="nsew",padx=3,pady=4)
+        close.grid(row=len(items)//2,column=len(items)%2,sticky="nsew",padx=3,pady=4)
+        grid.rowconfigure(len(items)//2, weight=1)
         hint(self.panel, "Arrastrá el encabezado para mover")
         self.bind("<Enter>", lambda e: self.cancel(), add="+")
         self.bind("<Leave>", self._leave, add="+")
@@ -321,8 +333,8 @@ class ActionsBubble(tk.Toplevel):
             return
         self.expanded=True
         self.pill.place_forget()
-        self._geometry(340,370)
-        self.panel.place(x=self.px(16),y=self.px(16),width=self.px(308),height=self.px(338))
+        self._geometry(340,self.panel_height)
+        self.panel.place(x=self.px(16),y=self.px(16),width=self.px(308),height=self.px(self.panel_height-32))
 
     def collapse_now(self):
         self.cancel()
@@ -344,4 +356,14 @@ class ActionsBubble(tk.Toplevel):
         self.cancel()
         dx,dy=self.drag_offset
         self.position=(event.x_root-dx,event.y_root-dy)
-        self._geometry(340 if self.expanded else 158,370 if self.expanded else 62)
+        self._geometry(340 if self.expanded else 158,self.panel_height if self.expanded else 62)
+
+    def set_status(self, text):
+        if self.status.cget("text") != text:
+            self.status.configure(text=text)
+
+    def set_paused(self, paused):
+        if self.pause_button is not None:
+            self.pause_button.configure(text="Continuar" if paused else "Pausar")
+        if paused:
+            self.set_status("PAUSADO · Elegí Continuar")

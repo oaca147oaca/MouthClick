@@ -12,6 +12,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mouthclick_ui import Menu, field, hint, toggle, style_floating
+from mouthclick_live_ui import numeric
+from mouthclick_runtime import FACE_POINTS, RANGES, validated
+from tkinter import messagebox
+import math
 
 ctypes.windll.user32.SetProcessDPIAware()
 
@@ -28,14 +32,14 @@ def widgets(root):
 def namespace(source):
     tree = ast.parse(source)
     keep = []
-    constants = {'DEFAULT_PROFILE', 'AVAILABLE_ACTIONS', 'SENS_LEVELS', 'LEGACY_SENS_MAP', 'WINK_DIFF_LEVELS'}
+    constants = {'DEFAULT_PROFILE', 'AVAILABLE_ACTIONS', 'SENS_LEVELS', 'LEGACY_SENS_MAP', 'WINK_DIFF_LEVELS', 'GAIN_X_BY_LEVEL', 'GAIN_Y_BY_LEVEL'}
     for n in tree.body:
         if isinstance(n, ast.FunctionDef) and n.name in ('show_gui_menu', 'normalize_profile'):
             keep.append(n)
         elif isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in constants for t in n.targets):
             keep.append(n)
     saved = []
-    env = dict(tk=tk, ttk=ttk, Menu=Menu, field=field, hint=hint, toggle=toggle,
+    env = dict(numeric=numeric, FACE_POINTS=FACE_POINTS, RANGES=RANGES, validated=validated, math=math, messagebox=messagebox, tk=tk, ttk=ttk, Menu=Menu, field=field, hint=hint, toggle=toggle,
                style_floating=style_floating,
                load_profiles=lambda: copy.deepcopy(PROFILES),
                save_profiles=lambda p: saved.append(copy.deepcopy(p)),
@@ -52,6 +56,7 @@ def run(source, name, select=False, size=None, scale=None, capture=False):
         if scale:
             root.tk.call('tk', 'scaling', scale)
         if size:
+            root.state("normal")
             root.geometry(size)
         root.update_idletasks()
         root.update()
@@ -93,6 +98,8 @@ def run(source, name, select=False, size=None, scale=None, capture=False):
 
 
 for name in FILES:
+    if name == "mouthclick_mvp_opticalflow.py":
+        continue  # Intentional runtime changes are covered by test_runtime.py.
     before = subprocess.check_output(['git', 'show', 'HEAD:'+name]).decode('utf-8-sig')
     after = Path(name).read_text(encoding='utf-8-sig')
     for select in (False, True):

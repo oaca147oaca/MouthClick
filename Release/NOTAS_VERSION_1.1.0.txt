@@ -1,0 +1,19 @@
+﻿MOUTHCLICK 1.1.0
+Fecha: 2026-09-24
+
+INSTALACION
+Abrir MouthClick_Setup_v1.1.0.exe y seguir el asistente.
+Windows 10/11 de 64 bits. Requiere camara compatible y permiso de acceso.
+Incluye Python y dependencias; no requiere instalar Python ni usar comandos.
+Instala para el usuario actual y permite crear acceso directo en el escritorio.
+
+CAMBIOS
+Interfaz Teleton Labs, teclado oculto al iniciar y nueva burbuja de accesos.
+Abrir el teclado desde la burbuja o con F9.
+Perfil inicial Default, sin perfiles personales del equipo de desarrollo.
+Las actualizaciones conservan profiles.json existente.
+
+VERIFICACION
+Ejecutable empaquetado probado: abre la configuracion correctamente.
+No se realizo una sesion de seguimiento con camara ni una prueba en una PC limpia.
+No se modificaron los perfiles locales del proyecto.

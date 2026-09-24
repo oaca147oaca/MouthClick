@@ -1,16 +1,17 @@
 {
     "Default": {
-        "mouth": "Nada",
+        "mouth": "Drag toggle",
         "wink_left": "Click izquierdo",
         "wink_right": "Click derecho",
-        "cam_name": null,
+        "camera": 0,
         "sens_x": "media",
         "sens_y": "media",
+        "sensitivity": "media",
         "stabilize": false,
-        "auto_zoom": false,
+        "zoom": false,
         "dwell_time": 2.0,
         "wink_diff_sens": "estricto",
-        "control_point": "nariz"
+        "tracking_mode": "Punto manual"
     },
     "Octavio": {
         "mouth": "Drag toggle",
@@ -18,13 +19,22 @@
         "wink_right": "Click derecho",
         "camera": 1,
         "sens_x": "media",
-        "sens_y": "media",
+        "sens_y": "baja",
         "sensitivity": "media",
         "stabilize": true,
         "zoom": false,
         "dwell_time": 1.5,
         "wink_diff_sens": "muy estricto",
-        "tracking_mode": "Punto manual"
+        "tracking_mode": "Punto facial",
+        "face_point": "Punta de nariz",
+        "sound_enabled": true,
+        "dwell_enabled": false,
+        "gain_x": 62.0,
+        "gain_y": 36.0,
+        "mouth_threshold": 0.055,
+        "dwell_radius": 20.0,
+        "deadzone": 0.15,
+        "smoothing": 0.65
     },
     "Edu": {
         "mouth": "Doble click",

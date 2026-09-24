@@ -14,7 +14,10 @@ import tkinter as tk
 from tkinter import ttk
 from mouthclick_ui import Menu, field, toggle, hint, style_floating, draw_status, ActionsBubble
 from pynput import keyboard
-import winsound
+import queue
+from tkinter import messagebox
+from mouthclick_runtime import FACE_POINTS, RANGES, validated, point_pixels, atomic_save_profiles, ActionAudio, gain_index, step_gain
+from mouthclick_live_ui import LiveSettings, numeric
 
 try:
     from pygrabber.dshow_graph import FilterGraph
@@ -95,7 +98,10 @@ DEFAULT_PROFILE = {
     "zoom": False,
     "dwell_time": 2.0,
     "wink_diff_sens": "normal",
-    "tracking_mode": "Punto manual",
+    "tracking_mode": "Punto facial",
+    "face_point": "Punta de nariz",
+    "sound_enabled": True,
+    "dwell_enabled": False,
 }
 
 
@@ -114,12 +120,12 @@ def load_profiles():
 
 
 def save_profiles(profiles):
-    with open(PROFILES_FILE, "w", encoding="utf-8") as f:
-        json.dump(profiles, f, indent=4, ensure_ascii=False)
+    atomic_save_profiles(PROFILES_FILE, profiles)
 
 
 def normalize_profile(p):
     """Soporta profiles viejos con 'sensitivity' única."""
+    p = p or {}
     merged = DEFAULT_PROFILE.copy()
     merged.update(p or {})
 
@@ -139,6 +145,18 @@ def normalize_profile(p):
     if merged.get("wink_diff_sens") not in WINK_DIFF_LEVELS:
         merged["wink_diff_sens"] = DEFAULT_PROFILE["wink_diff_sens"]
 
+    if merged.get("face_point") not in FACE_POINTS:
+        merged["face_point"] = "Punta de nariz"
+    for key, (low, high, default) in RANGES.items():
+        if key == "gain_x":
+            default = GAIN_X_BY_LEVEL[merged["sens_x"]]
+        elif key == "gain_y":
+            default = GAIN_Y_BY_LEVEL[merged["sens_y"]]
+        try:
+            value = float(merged.get(key, default))
+            merged[key] = value if math.isfinite(value) and low <= value <= high else default
+        except (ValueError, TypeError):
+            merged[key] = default
     return merged
 
 
@@ -178,7 +196,11 @@ def show_gui_menu():
     zoom_var = tk.BooleanVar(value=False)
     dwell_time_var = tk.StringVar(value="2.0")
     wink_diff_sens_var = tk.StringVar(value=DEFAULT_PROFILE["wink_diff_sens"])
-    tracking_mode_var = tk.StringVar(value="Punto manual")
+    tracking_mode_var = tk.StringVar(value="Punta de nariz")
+    gain_x_var = tk.StringVar()
+    gain_y_var = tk.StringVar()
+    sound_var = tk.BooleanVar(value=True)
+    dwell_enabled_var = tk.BooleanVar(value=False)
     cam_names, cam_map = get_camera_options()
     cam_index_var = tk.StringVar(value=cam_names[0] if cam_names else "Cam 0")
     selected_config = {}
@@ -189,8 +211,8 @@ def show_gui_menu():
     hint(profile, "Tus ajustes se guardan al comenzar el control.")
     camera = ui.card("Cámara y seguimiento")
     field(camera, "Cámara", cam_index_var, cam_names)
-    field(camera, "Seguimiento del cursor", tracking_mode_var, ["Punto manual"])
-    hint(camera, "La cámara se inicia al comenzar. Después, elegí un punto de la cara: nariz, entrecejo, ceja o pómulo.")
+    field(camera, "Punto facial que mueve el cursor", tracking_mode_var, list(FACE_POINTS))
+    hint(camera, "El punto se detecta automáticamente. La vista de cámara permanece oculta; M permite verla si necesitás comprobar la posición.")
     gestures = ui.card("Acciones por gesto")
     field(gestures, "Boca", mouth_action_var, AVAILABLE_ACTIONS)
     field(gestures, "Guiño izquierdo", wink_left_action_var, AVAILABLE_ACTIONS)
@@ -198,6 +220,10 @@ def show_gui_menu():
     motion = ui.card("Movimiento del cursor")
     field(motion, "Sensibilidad horizontal · Eje X", sens_x_var, SENS_LEVELS)
     field(motion, "Sensibilidad vertical · Eje Y", sens_y_var, SENS_LEVELS)
+    numeric(motion, "Ajuste fino horizontal · X", gain_x_var, "gain_x")
+    numeric(motion, "Ajuste fino vertical · Y", gain_y_var, "gain_y")
+    sens_x_var.trace_add("write", lambda *args: gain_x_var.set(GAIN_X_BY_LEVEL.get(sens_x_var.get(), 62)))
+    sens_y_var.trace_add("write", lambda *args: gain_y_var.set(GAIN_Y_BY_LEVEL.get(sens_y_var.get(), 52)))
     toggle(motion, "Suavizado del punto óptico", stabilize_var)
     wink = ui.card("Precisión del guiño")
     field(wink, "Sensibilidad del guiño", wink_diff_sens_var, WINK_DIFF_LEVELS)
@@ -205,6 +231,8 @@ def show_gui_menu():
     aids = ui.card("Ayudas de acceso")
     field(aids, "Tiempo de autoclick · segundos", dwell_time_var, ["0.5", "1.0", "1.5", "2.0", "2.5", "3.0"])
     toggle(aids, "Zoom automático de Windows", zoom_var)
+    toggle(aids, "Sonido de las acciones", sound_var)
+    toggle(aids, "Autoclick al comenzar", dwell_enabled_var)
     hint(aids, "F8 activa o desactiva el autoclick durante el uso.")
     def apply_profile(profile_name):
         p = normalize_profile(profiles.get(profile_name, DEFAULT_PROFILE))
@@ -219,7 +247,11 @@ def show_gui_menu():
         zoom_var.set(bool(p.get("zoom", False)))
         dwell_time_var.set(str(p.get("dwell_time", 2.0)))
         wink_diff_sens_var.set(p.get("wink_diff_sens", DEFAULT_PROFILE["wink_diff_sens"]))
-        tracking_mode_var.set(p.get("tracking_mode", "Punto manual"))
+        tracking_mode_var.set(p["face_point"])
+        gain_x_var.set(p["gain_x"])
+        gain_y_var.set(p["gain_y"])
+        sound_var.set(p.get("sound_enabled", True))
+        dwell_enabled_var.set(p.get("dwell_enabled", False))
 
         cam_idx = int(p.get("camera", 0))
         for name, idx in cam_map.items():
@@ -234,6 +266,7 @@ def show_gui_menu():
         name = profile_name_var.get().strip() or "Default"
 
         p = {
+            **normalize_profile(profiles.get(selected_profile.get(), DEFAULT_PROFILE)),
             "mouth": mouth_action_var.get(),
             "wink_left": wink_left_action_var.get(),
             "wink_right": wink_right_action_var.get(),
@@ -245,23 +278,36 @@ def show_gui_menu():
             "zoom": bool(zoom_var.get()),
             "dwell_time": float(dwell_time_var.get()),
             "wink_diff_sens": wink_diff_sens_var.get(),
-            "tracking_mode": tracking_mode_var.get(),
+            "tracking_mode": "Punto facial",
+            "face_point": tracking_mode_var.get(),
+            "gain_x": gain_x_var.get(),
+            "gain_y": gain_y_var.get(),
+            "sound_enabled": bool(sound_var.get()),
+            "dwell_enabled": bool(dwell_enabled_var.get()),
         }
 
+        try:
+            p = validated(p)
+            updated = {**profiles, name: p}
+            save_profiles(updated)
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("No se pudo guardar", str(exc), parent=window)
+            return
         profiles[name] = p
-        save_profiles(profiles)
 
         selected_config.update(p)
+        selected_config["_profile_name"] = name
         window.quit()
         window.destroy()
 
     profile_combo.bind("<<ComboboxSelected>>", on_profile_selected)
     apply_profile(selected_profile.get())
-    ui.finish(start, "F11: pausa / continuar · F12: salir · Esc / F10: liberar entradas\nF7: centrar · R: elegir punto · K: recalibrar guiño\nF9: teclado · B: accesos rápidos · M: ventana\nF1/F2: sensibilidad Y · F3/F4: sensibilidad X · F5/F6: sensibilidad del guiño")
+    ui.finish(start, "F11: pausa / continuar · F12: salir · Esc / F10: liberar entradas\nF7: centrar · R: recuperar punto · K: recalibrar guiño\nF9: teclado · B: accesos rápidos · M: mostrar / ocultar cámara\nF1/F2: sensibilidad Y · F3/F4: sensibilidad X · F5/F6: sensibilidad del guiño")
+    window.state("zoomed")
     window.mainloop()
 
     if not selected_config:
-        selected_config.update(normalize_profile(profiles.get(selected_profile.get(), DEFAULT_PROFILE)))
+        raise SystemExit(0)  # Closing setup must not start cursor control.
 
     return selected_config
 
@@ -283,13 +329,13 @@ AUTO_ZOOM_ENABLED = bool(CONFIG.get("zoom", False))
 DWELL_CLICK_SEC = float(CONFIG.get("dwell_time", 2.0))
 WINK_DIFF_SENS = CONFIG.get("wink_diff_sens", DEFAULT_PROFILE["wink_diff_sens"])
 
-REL_GAIN_X = GAIN_X_BY_LEVEL.get(SENS_X, GAIN_X_BY_LEVEL["media"])
-REL_GAIN_Y = GAIN_Y_BY_LEVEL.get(SENS_Y, GAIN_Y_BY_LEVEL["media"])
+REL_GAIN_X = CONFIG["gain_x"]
+REL_GAIN_Y = CONFIG["gain_y"]
 WINK_DIFF_THR = WINK_DIFF_THR_BY_LEVEL.get(WINK_DIFF_SENS, WINK_DIFF_THR_BY_LEVEL[DEFAULT_PROFILE["wink_diff_sens"]])
 WINK_CLOSED_RATIO_THR = WINK_CLOSED_RATIO_BY_LEVEL.get(WINK_DIFF_SENS, WINK_CLOSED_RATIO_BY_LEVEL[DEFAULT_PROFILE["wink_diff_sens"]])
 
-CURRENT_SENS_X_INDEX = SENS_LEVELS.index(SENS_X) if SENS_X in SENS_LEVELS else 2
-CURRENT_SENS_Y_INDEX = SENS_LEVELS.index(SENS_Y) if SENS_Y in SENS_LEVELS else 2
+CURRENT_SENS_X_INDEX = gain_index(REL_GAIN_X, list(GAIN_X_BY_LEVEL.values()))
+CURRENT_SENS_Y_INDEX = gain_index(REL_GAIN_Y, list(GAIN_Y_BY_LEVEL.values()))
 CUSTOM_SENS_X_STEPS = 0
 CUSTOM_SENS_Y_STEPS = 0
 CURRENT_WINK_DIFF_INDEX = WINK_DIFF_LEVELS.index(WINK_DIFF_SENS) if WINK_DIFF_SENS in WINK_DIFF_LEVELS else 2
@@ -313,9 +359,16 @@ SAFE_MARGIN = 8
 
 RUNNING = True
 PAUSED = False
-DWELL_ENABLED = False
+DWELL_ENABLED = bool(CONFIG.get("dwell_enabled", False))
 
-SHOW_OVERLAY = True
+SHOW_OVERLAY = False
+CAMERA_VISIBLE = False
+FACE_POINT = CONFIG["face_point"]
+SOUND_ENABLED = bool(CONFIG.get("sound_enabled", True))
+ACTIVE_PROFILE = CONFIG["_profile_name"]
+live_settings_window = None
+ui_commands = queue.SimpleQueue()
+action_audio = None
 WINDOW_NAME = "Face Mouse"
 WINDOW_FULLSCREEN = False
 FLOATING_KEYBOARD_VISIBLE = False
@@ -348,8 +401,9 @@ selected_anchor_offset = None
 last_face_anchor = None
 
 # Movimiento
-POINT_SMOOTH_ALPHA = 0.65 if STABILIZE else 1.0  # alto = más responsivo
-DEADZONE_PX_CAMERA = 0.15                         # zona muerta en pixels de cámara
+SMOOTHING = CONFIG["smoothing"]
+POINT_SMOOTH_ALPHA = SMOOTHING if STABILIZE else 1.0  # alto = más responsivo
+DEADZONE_PX_CAMERA = CONFIG["deadzone"]                         # zona muerta en pixels de cámara
 MAX_MOUSE_STEP = 140                              # límite por frame en pantalla
 PRECISION_CAM_PX = 1.8                            # movimientos chicos entran en modo precisión
 PRECISION_MIN_SCALE = 0.35
@@ -370,7 +424,7 @@ prev_speed_time = time.time()
 
 # Gestos boca / guiños
 SLOW_START_RATIO = 0.035
-CLICK_ARM_RATIO = 0.055
+CLICK_ARM_RATIO = CONFIG["mouth_threshold"]
 CLICK_SHORT_SEC = 0.15
 CLICK_COOLDOWN_SEC = 0.40
 DBLCLICK_INTERVAL_SEC = 0.12
@@ -423,7 +477,7 @@ mouth_open_now = False
 drag_active = False
 
 # Dwell
-DWELL_STILL_RADIUS_PX = 20
+DWELL_STILL_RADIUS_PX = CONFIG["dwell_radius"]
 DWELL_POST_CLICK_DELAY = 1.0
 last_move_time = time.time()
 last_dwell_click_time = 0.0
@@ -467,26 +521,7 @@ def precision_scale_from_camera_delta(dx_cam, dy_cam):
 
 
 def face_anchor_px(lm, frame_w, frame_h):
-    # Promedio de landmarks rígidos alrededor de nariz/entrecejo para reducir jitter de un punto único.
-    stable_idxs = [168, 6, 197, 195, 5, 4]
-    pts = []
-    for idx in stable_idxs:
-        if len(lm) > idx:
-            p = lm[idx]
-            pts.append((float(p.x * frame_w), float(p.y * frame_h)))
-
-    if pts:
-        return (
-            sum(p[0] for p in pts) / len(pts),
-            sum(p[1] for p in pts) / len(pts),
-        )
-
-    left = lm[33]
-    right = lm[263]
-    return (
-        float(((left.x + right.x) * 0.5) * frame_w),
-        float(((left.y + right.y) * 0.5) * frame_h),
-    )
+    return point_pixels(lm, FACE_POINT, frame_w, frame_h)
 
 
 def smooth_face_anchor(anchor):
@@ -576,17 +611,12 @@ def setup_camera_window():
 
 
 def toggle_camera_window():
-    global WINDOW_FULLSCREEN
-    WINDOW_FULLSCREEN = not WINDOW_FULLSCREEN
-    try:
-        if WINDOW_FULLSCREEN:
-            cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        else:
-            cv2.setWindowProperty(WINDOW_NAME, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(WINDOW_NAME, 960, 720)
-        print(f"[WINDOW] {'Fullscreen' if WINDOW_FULLSCREEN else 'Normal'}")
-    except Exception as e:
-        print("[WINDOW WARN]", e)
+    global CAMERA_VISIBLE
+    CAMERA_VISIBLE = not CAMERA_VISIBLE
+    if CAMERA_VISIBLE:
+        setup_camera_window()
+    else:
+        cv2.destroyWindow(WINDOW_NAME)
 
 
 def hotkey_zoom_open():
@@ -647,6 +677,7 @@ def do_click():
     x, y = pyautogui.position()
     suspend_move_until = time.time() + FREEZE_ON_LEFT_CLICK_SEC
     pyautogui.click(x=x, y=y, button="left")
+    play_action_sound("Click izquierdo")
 
 
 def do_right_click():
@@ -654,6 +685,7 @@ def do_right_click():
     x, y = pyautogui.position()
     suspend_move_until = time.time() + FREEZE_ON_GESTURE_SEC
     pyautogui.click(x=x, y=y, button="right")
+    play_action_sound("Click derecho")
 
 
 def do_double_click():
@@ -663,6 +695,7 @@ def do_double_click():
     pyautogui.click(x=x, y=y)
     time.sleep(DBLCLICK_INTERVAL_SEC)
     pyautogui.click(x=x, y=y)
+    play_action_sound("Doble click")
 
 
 def start_drag():
@@ -671,6 +704,7 @@ def start_drag():
         suspend_move_until = 0.0
         pyautogui.mouseDown(button="left")
         drag_active = True
+        play_action_sound("Drag toggle")
         print("[DRAG] START")
 
 
@@ -679,6 +713,7 @@ def stop_drag():
     if drag_active:
         pyautogui.mouseUp(button="left")
         drag_active = False
+        play_action_sound("Drag toggle")
         suspend_move_until = 0.0
         print("[DRAG] STOP")
 
@@ -719,14 +754,8 @@ ACTION_SOUNDS = {
 
 
 def play_action_sound(action_name):
-    pattern = ACTION_SOUNDS.get(action_name)
-    if not pattern:
-        return
-    try:
-        for freq, dur in pattern:
-            winsound.Beep(freq, dur)
-    except Exception:
-        pass
+    if SOUND_ENABLED and action_audio is not None:
+        action_audio.play(action_name)
 
 
 def execute_action(action_name):
@@ -734,7 +763,6 @@ def execute_action(action_name):
         return
     if action_debounced(action_name):
         return
-    play_action_sound(action_name)
     if action_name == "Click izquierdo":
         do_click()
     elif action_name == "Doble click":
@@ -799,6 +827,7 @@ def is_own_or_helper_window(hwnd):
         "mouthclick teclado" in title
         or "mouthclick keyboard" in title
         or "mouthclick acciones" in title
+        or "mouthclick ajustes" in title
         or WINDOW_NAME.lower() in title
     )
 
@@ -953,13 +982,16 @@ def keyboard_style():
 
 
 def resize_floating_keyboard(delta):
-    global keyboard_size_index, floating_keyboard_root, floating_actions_root
+    global keyboard_size_index, floating_keyboard_root, floating_actions_root, live_settings_window
     keyboard_size_index = clamp(keyboard_size_index + delta, 0, len(KEYBOARD_SIZE_LEVELS) - 1)
     if floating_keyboard_root is None:
         return
     try:
         was_visible = FLOATING_KEYBOARD_VISIBLE
         actions_was_visible = FLOATING_ACTIONS_VISIBLE
+        if live_settings_window is not None and live_settings_window.winfo_exists():
+            live_settings_window.discard()
+        live_settings_window = None
         floating_keyboard_root.destroy()
         floating_keyboard_root = None
         floating_actions_root = None
@@ -1034,8 +1066,11 @@ def create_quick_actions_bubble():
             ("Derecho", lambda: None if keyboard_debounced("bubble:right") else do_right_click()),
             ("Drag", lambda: None if keyboard_debounced("bubble:drag") else (stop_drag() if drag_active else start_drag())),
             ("Teclado", toggle_floating_keyboard),
+            ("Sensibilidades", open_live_settings),
             ("Calib", reset_wink_calibration),
             ("Centro", center_mouse),
+            ("Pausa", toggle_pause),
+            ("Salir", request_exit),
         ]
         def remember_pos(x, y):
             global floating_actions_pos
@@ -1051,6 +1086,7 @@ def create_quick_actions_bubble():
 
         root = ActionsBubble(floating_keyboard_root, items, floating_actions_pos,
                              remember_pos, schedule_collapse, cancel_collapse)
+        root.set_paused(PAUSED)
         root.protocol("WM_DELETE_WINDOW", toggle_floating_actions)
         make_window_no_activate(root, remember_as_keyboard=False)
         floating_actions_root = root
@@ -1229,6 +1265,11 @@ def center_mouse():
 def reset_tracking():
     global SELECTING_POINT, tracking_point, prev_gray, last_good_point, smooth_x, smooth_y
     global selected_anchor_offset, last_face_anchor
+    global mouth_open_prev, mouth_open_start, mouth_click_armed, wink_candidate, wink_candidate_frames
+    global last_move_time, dwell_progress
+    mouth_open_prev, mouth_open_start, mouth_click_armed = False, None, False
+    wink_candidate, wink_candidate_frames = None, 0
+    last_move_time, dwell_progress = time.time(), 0.0
     SELECTING_POINT = True
     tracking_point = None
     prev_gray = None
@@ -1237,7 +1278,7 @@ def reset_tracking():
     smooth_y = None
     selected_anchor_offset = None
     last_face_anchor = None
-    print("[TRACK] Seleccioná un punto con click en la ventana")
+    print("[TRACK] Buscando punto facial:", FACE_POINT)
 
 
 def reset_wink_calibration():
@@ -1443,6 +1484,7 @@ def open_camera(index):
     cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
     if not cap.isOpened():
         print("[WARN] DSHOW falló, probando DEFAULT")
+        cap.release()
         cap = cv2.VideoCapture(index)
 
     if not cap.isOpened():
@@ -1452,6 +1494,7 @@ def open_camera(index):
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     cap.set(cv2.CAP_PROP_FPS, 60)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     print(f"[INFO] Cámara abierta en índice {index}")
     return cap
@@ -1481,6 +1524,33 @@ def on_mouse(event, x, y, flags, param):
         print(f"[TRACK] Punto seleccionado: x={x}, y={y}")
 
 
+def toggle_pause():
+    global PAUSED
+    release_all_inputs(close_context_menu=False)
+    PAUSED = not PAUSED
+    reset_tracking()
+    if floating_actions_root is not None:
+        floating_actions_root.set_paused(PAUSED)
+
+
+def request_exit():
+    global RUNNING
+    release_all_inputs(close_context_menu=False)
+    RUNNING = False
+
+
+def process_hotkeys(limit=64):
+    # A large input queue must not starve Tk updates or camera processing.
+    for _ in range(limit):
+        try:
+            key = ui_commands.get_nowait()
+        except queue.Empty:
+            break
+        on_press(key)
+        if not RUNNING:
+            break
+
+
 def on_press(key):
     global RUNNING, PAUSED, DWELL_ENABLED
     global CURRENT_SENS_X_INDEX, CURRENT_SENS_Y_INDEX, REL_GAIN_X, REL_GAIN_Y
@@ -1491,13 +1561,10 @@ def on_press(key):
     try:
         if key == keyboard.Key.f12:
             print("[HOTKEY] F12 -> salir")
-            release_all_inputs(close_context_menu=True)
-            RUNNING = False
+            request_exit()
 
         elif key == keyboard.Key.f11:
-            release_all_inputs(close_context_menu=True)
-            PAUSED = not PAUSED
-            print("[HOTKEY] F11 -> pausa", PAUSED)
+            toggle_pause()
 
         elif key == keyboard.Key.f8:
             release_all_inputs(close_context_menu=True)
@@ -1515,47 +1582,20 @@ def on_press(key):
             release_all_inputs(close_context_menu=True)
 
         elif key == keyboard.Key.esc:
-            release_all_inputs(close_context_menu=True)
+            # Escape has already reached the target application. Never emit it again.
+            release_all_inputs(close_context_menu=False)
 
-        elif key == keyboard.Key.f3:
-            if CUSTOM_SENS_X_STEPS > 0:
-                CUSTOM_SENS_X_STEPS -= 1
-                REL_GAIN_X = GAIN_X_BY_LEVEL[SENS_LEVELS[-1]] + CUSTOM_SENS_X_STEPS * 8.0
-                print(f"[SENS] X -> custom+{CUSTOM_SENS_X_STEPS} {REL_GAIN_X}")
-            else:
-                CURRENT_SENS_X_INDEX = max(0, CURRENT_SENS_X_INDEX - 1)
-                REL_GAIN_X = GAIN_X_BY_LEVEL[SENS_LEVELS[CURRENT_SENS_X_INDEX]]
-                print(f"[SENS] X -> {SENS_LEVELS[CURRENT_SENS_X_INDEX]} {REL_GAIN_X}")
+        elif key in (keyboard.Key.f3, keyboard.Key.f4):
+            direction = 1 if key == keyboard.Key.f4 else -1
+            REL_GAIN_X = step_gain(REL_GAIN_X, list(GAIN_X_BY_LEVEL.values()), direction, 8.0)
+            CURRENT_SENS_X_INDEX = gain_index(REL_GAIN_X, list(GAIN_X_BY_LEVEL.values()))
+            CUSTOM_SENS_X_STEPS = max(0, (REL_GAIN_X-GAIN_X_BY_LEVEL[SENS_LEVELS[-1]])/8.0)
 
-        elif key == keyboard.Key.f4:
-            if CURRENT_SENS_X_INDEX >= len(SENS_LEVELS) - 1:
-                CUSTOM_SENS_X_STEPS += 1
-                REL_GAIN_X = GAIN_X_BY_LEVEL[SENS_LEVELS[-1]] + CUSTOM_SENS_X_STEPS * 8.0
-                print(f"[SENS] X -> custom+{CUSTOM_SENS_X_STEPS} {REL_GAIN_X}")
-            else:
-                CURRENT_SENS_X_INDEX += 1
-                REL_GAIN_X = GAIN_X_BY_LEVEL[SENS_LEVELS[CURRENT_SENS_X_INDEX]]
-                print(f"[SENS] X -> {SENS_LEVELS[CURRENT_SENS_X_INDEX]} {REL_GAIN_X}")
-
-        elif key == keyboard.Key.f1:
-            if CUSTOM_SENS_Y_STEPS > 0:
-                CUSTOM_SENS_Y_STEPS -= 1
-                REL_GAIN_Y = GAIN_Y_BY_LEVEL[SENS_LEVELS[-1]] + CUSTOM_SENS_Y_STEPS * 7.0
-                print(f"[SENS] Y -> custom+{CUSTOM_SENS_Y_STEPS} {REL_GAIN_Y}")
-            else:
-                CURRENT_SENS_Y_INDEX = max(0, CURRENT_SENS_Y_INDEX - 1)
-                REL_GAIN_Y = GAIN_Y_BY_LEVEL[SENS_LEVELS[CURRENT_SENS_Y_INDEX]]
-                print(f"[SENS] Y -> {SENS_LEVELS[CURRENT_SENS_Y_INDEX]} {REL_GAIN_Y}")
-
-        elif key == keyboard.Key.f2:
-            if CURRENT_SENS_Y_INDEX >= len(SENS_LEVELS) - 1:
-                CUSTOM_SENS_Y_STEPS += 1
-                REL_GAIN_Y = GAIN_Y_BY_LEVEL[SENS_LEVELS[-1]] + CUSTOM_SENS_Y_STEPS * 7.0
-                print(f"[SENS] Y -> custom+{CUSTOM_SENS_Y_STEPS} {REL_GAIN_Y}")
-            else:
-                CURRENT_SENS_Y_INDEX += 1
-                REL_GAIN_Y = GAIN_Y_BY_LEVEL[SENS_LEVELS[CURRENT_SENS_Y_INDEX]]
-                print(f"[SENS] Y -> {SENS_LEVELS[CURRENT_SENS_Y_INDEX]} {REL_GAIN_Y}")
+        elif key in (keyboard.Key.f1, keyboard.Key.f2):
+            direction = 1 if key == keyboard.Key.f2 else -1
+            REL_GAIN_Y = step_gain(REL_GAIN_Y, list(GAIN_Y_BY_LEVEL.values()), direction, 7.0)
+            CURRENT_SENS_Y_INDEX = gain_index(REL_GAIN_Y, list(GAIN_Y_BY_LEVEL.values()))
+            CUSTOM_SENS_Y_STEPS = max(0, (REL_GAIN_Y-GAIN_Y_BY_LEVEL[SENS_LEVELS[-1]])/7.0)
 
         elif key == keyboard.Key.f5:
             CURRENT_WINK_DIFF_INDEX = max(0, CURRENT_WINK_DIFF_INDEX - 1)
@@ -1584,8 +1624,145 @@ def on_press(key):
             except Exception:
                 pass
 
+        if live_settings_window is not None and live_settings_window.winfo_exists():
+            live_settings_window.sync(runtime_snapshot())
     except Exception as e:
         print("[HOTKEY WARN]", e)
+
+
+def update_optical_tracking(gray, now):
+    global smooth_x, smooth_y, cur_x, cur_y, prev_cursor_pos, prev_speed_time
+    global cursor_speed, tracking_point, last_good_point, SELECTING_POINT, prev_gray
+    if tracking_point is not None and prev_gray is not None:
+        next_point, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, gray, tracking_point, None, **lk_params)
+        if next_point is not None and status is not None and (status[0][0] == 1):
+            old_x, old_y = tracking_point[0][0]
+            new_x, new_y = next_point[0][0]
+            if smooth_x is None:
+                smooth_x, smooth_y = (float(new_x), float(new_y))
+            else:
+                smooth_x = (1 - POINT_SMOOTH_ALPHA) * smooth_x + POINT_SMOOTH_ALPHA * float(new_x)
+                smooth_y = (1 - POINT_SMOOTH_ALPHA) * smooth_y + POINT_SMOOTH_ALPHA * float(new_y)
+            dx_cam = smooth_x - float(old_x)
+            dy_cam = smooth_y - float(old_y)
+            if abs(dx_cam) < DEADZONE_PX_CAMERA:
+                dx_cam = 0.0
+            if abs(dy_cam) < DEADZONE_PX_CAMERA:
+                dy_cam = 0.0
+            precision_scale = precision_scale_from_camera_delta(dx_cam, dy_cam)
+            dx_mouse = dx_cam * REL_GAIN_X * precision_scale
+            dy_mouse = dy_cam * REL_GAIN_Y * precision_scale
+            dist = math.hypot(dx_mouse, dy_mouse)
+            if dist > MAX_MOUSE_STEP:
+                k = MAX_MOUSE_STEP / dist
+                dx_mouse *= k
+                dy_mouse *= k
+            if now >= suspend_move_until:
+                if dx_mouse != 0.0 or dy_mouse != 0.0:
+                    cur_x, cur_y = pyautogui.position()
+                    tx = int(clamp_with_margin(cur_x + dx_mouse, 0, SCREEN_W - 1))
+                    ty = int(clamp_with_margin(cur_y + dy_mouse, 0, SCREEN_H - 1))
+                    pyautogui.moveTo(tx, ty)
+                    now_pos = pyautogui.position()
+                    dt = max(1e-06, time.time() - prev_speed_time)
+                    cursor_speed = math.hypot(now_pos[0] - prev_cursor_pos[0], now_pos[1] - prev_cursor_pos[1]) / dt
+                    prev_cursor_pos = now_pos
+                    prev_speed_time = time.time()
+            tracking_point = np.array([[[np.float32(smooth_x), np.float32(smooth_y)]]], dtype=np.float32)
+            last_good_point = (smooth_x, smooth_y)
+        elif last_face_anchor is not None and selected_anchor_offset is not None:
+            recover_x = clamp(last_face_anchor[0] + selected_anchor_offset[0], 0, gray.shape[1] - 1)
+            recover_y = clamp(last_face_anchor[1] + selected_anchor_offset[1], 0, gray.shape[0] - 1)
+            smooth_x = float(recover_x)
+            smooth_y = float(recover_y)
+            tracking_point = np.array([[[np.float32(smooth_x), np.float32(smooth_y)]]], dtype=np.float32)
+            last_good_point = (smooth_x, smooth_y)
+        else:
+            SELECTING_POINT = True
+            tracking_point = None
+        prev_gray = gray
+
+
+def runtime_snapshot():
+    return {
+        "face_point": FACE_POINT, "gain_x": REL_GAIN_X, "gain_y": REL_GAIN_Y,
+        "sens_x": SENS_LEVELS[CURRENT_SENS_X_INDEX], "sens_y": SENS_LEVELS[CURRENT_SENS_Y_INDEX],
+        "wink_diff_sens": WINK_DIFF_LEVELS[CURRENT_WINK_DIFF_INDEX],
+        "mouth_threshold": CLICK_ARM_RATIO, "dwell_time": DWELL_CLICK_SEC,
+        "dwell_radius": DWELL_STILL_RADIUS_PX, "dwell_enabled": DWELL_ENABLED,
+        "deadzone": DEADZONE_PX_CAMERA, "stabilize": STABILIZE, "smoothing": SMOOTHING,
+        "zoom": AUTO_ZOOM_ENABLED, "sound_enabled": SOUND_ENABLED,
+        "_custom_x": CUSTOM_SENS_X_STEPS, "_custom_y": CUSTOM_SENS_Y_STEPS,
+    }
+
+
+def apply_runtime_settings(values):
+    global FACE_POINT, REL_GAIN_X, REL_GAIN_Y, STABILIZE, SMOOTHING, POINT_SMOOTH_ALPHA
+    global DEADZONE_PX_CAMERA, DWELL_CLICK_SEC, DWELL_STILL_RADIUS_PX, DWELL_ENABLED
+    global CURRENT_SENS_X_INDEX, CURRENT_SENS_Y_INDEX, CUSTOM_SENS_X_STEPS, CUSTOM_SENS_Y_STEPS
+    global CURRENT_WINK_DIFF_INDEX, WINK_CLOSED_RATIO_THR, WINK_DIFF_THR, CLICK_ARM_RATIO
+    global AUTO_ZOOM_ENABLED, SOUND_ENABLED, last_move_time, dwell_progress
+    global wink_candidate, wink_candidate_frames, mouth_open_prev, mouth_open_start, mouth_click_armed
+    values = validated(values)
+    if values["wink_diff_sens"] != WINK_DIFF_LEVELS[CURRENT_WINK_DIFF_INDEX]:
+        wink_candidate, wink_candidate_frames = None, 0
+    if values["mouth_threshold"] != CLICK_ARM_RATIO:
+        mouth_open_prev, mouth_open_start, mouth_click_armed = False, None, False
+    point_changed = values["face_point"] != FACE_POINT
+    dwell_changed = any(values[k] != runtime_snapshot()[k] for k in ("dwell_enabled", "dwell_time", "dwell_radius"))
+    FACE_POINT = values["face_point"]
+    REL_GAIN_X, REL_GAIN_Y = values["gain_x"], values["gain_y"]
+    CURRENT_SENS_X_INDEX = gain_index(REL_GAIN_X, list(GAIN_X_BY_LEVEL.values()))
+    CURRENT_SENS_Y_INDEX = gain_index(REL_GAIN_Y, list(GAIN_Y_BY_LEVEL.values()))
+    CUSTOM_SENS_X_STEPS = values.get("_custom_x", 0)
+    CUSTOM_SENS_Y_STEPS = values.get("_custom_y", 0)
+    STABILIZE, SMOOTHING = bool(values["stabilize"]), values["smoothing"]
+    POINT_SMOOTH_ALPHA = SMOOTHING if STABILIZE else 1.0
+    DEADZONE_PX_CAMERA = values["deadzone"]
+    DWELL_CLICK_SEC, DWELL_STILL_RADIUS_PX = values["dwell_time"], values["dwell_radius"]
+    DWELL_ENABLED = bool(values["dwell_enabled"])
+    CURRENT_WINK_DIFF_INDEX = WINK_DIFF_LEVELS.index(values["wink_diff_sens"])
+    WINK_CLOSED_RATIO_THR = WINK_CLOSED_RATIO_BY_LEVEL[values["wink_diff_sens"]]
+    WINK_DIFF_THR = WINK_DIFF_THR_BY_LEVEL[values["wink_diff_sens"]]
+    CLICK_ARM_RATIO = values["mouth_threshold"]
+    AUTO_ZOOM_ENABLED, SOUND_ENABLED = bool(values["zoom"]), bool(values["sound_enabled"])
+    if not AUTO_ZOOM_ENABLED and zoom_active:
+        zoom_out_windows()
+    if dwell_changed:
+        last_move_time, dwell_progress = time.time(), 0.0
+    if point_changed:
+        stop_drag()
+        reset_tracking()
+
+
+def save_runtime_settings(values):
+    if os.path.exists(PROFILES_FILE):
+        with open(PROFILES_FILE, encoding="utf-8") as f:
+            profiles = json.load(f)
+        if not isinstance(profiles, dict):
+            raise ValueError("El archivo de perfiles no es válido.")
+    else:
+        profiles = {}
+    settings = {k: v for k, v in validated(values).items() if not k.startswith("_")}
+    profile = {**CONFIG, **profiles.get(ACTIVE_PROFILE, {}), **settings}
+    profile.pop("_profile_name", None)
+    profile["sens_x"] = SENS_LEVELS[CURRENT_SENS_X_INDEX]
+    profile["sens_y"] = SENS_LEVELS[CURRENT_SENS_Y_INDEX]
+    profile["sensitivity"] = profile["sens_x"]
+    profile["tracking_mode"] = "Punto facial"
+    profiles[ACTIVE_PROFILE] = profile
+    save_profiles(profiles)
+    CONFIG.update(profile)
+
+
+def open_live_settings():
+    global live_settings_window
+    if live_settings_window is not None and live_settings_window.winfo_exists():
+        live_settings_window.lift()
+        return
+    live_settings_window = LiveSettings(
+        floating_keyboard_root, ACTIVE_PROFILE, runtime_snapshot(), apply_runtime_settings,
+        save_runtime_settings, lambda: action_audio.play("Click izquierdo"), lambda: action_audio.error)
 
 
 # =========================================
@@ -1605,262 +1782,135 @@ face_mesh = mp_face_mesh.FaceMesh(
     min_tracking_confidence=0.4
 )
 
-setup_camera_window()
+action_audio = ActionAudio()
 create_floating_keyboard()
 create_quick_actions_bubble()
 
-hotkey_listener = keyboard.Listener(on_press=on_press)
+hotkey_listener = keyboard.Listener(on_press=ui_commands.put)
 hotkey_listener.start()
 
-print("[TRACK] Hacé click sobre el punto de la cara que querés seguir.")
+print("[TRACK] Selección automática:", FACE_POINT)
 
 frame_count = 0
 last_debug_print = 0.0
 
+def report_status(text):
+    if floating_actions_root is not None:
+        floating_actions_root.set_status(text)
+    if live_settings_window is not None and live_settings_window.winfo_exists() and action_audio.error:
+        live_settings_window.message.configure(text=action_audio.error, fg="#FFD078")
+
+
+def present_camera(frame, status):
+    global CAMERA_VISIBLE
+    if not CAMERA_VISIBLE:
+        return
+    try:
+        if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+            CAMERA_VISIBLE = False
+            return
+        preview = frame.copy()
+        if smooth_x is not None and smooth_y is not None:
+            draw_control_cross(preview, smooth_x, smooth_y)
+        draw_status(preview, status, "warning" if SELECTING_POINT or PAUSED else "success")
+        cv2.imshow(WINDOW_NAME, preview)
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord("q"):
+            toggle_camera_window()
+    except cv2.error:
+        CAMERA_VISIBLE = False
+
+
 try:
     while RUNNING:
+        process_hotkeys()
         update_floating_keyboard()
+        if not RUNNING:
+            break
+        if PAUSED:
+            report_status("PAUSADO · F11 para continuar")
+            if last_preview_frame is not None:
+                present_camera(last_preview_frame, "PAUSADO - F11 para continuar")
+            time.sleep(0.02)
+            continue
 
         ok, frame = cap.read()
         if not ok:
-            continue
-
-        if PAUSED:
-            cv2.putText(frame, "PAUSA - F11 para continuar", (20, 40),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-            draw_status(frame, "PAUSADO · F11 para continuar", "warning")
-            cv2.imshow(WINDOW_NAME, frame)
-            pause_key = cv2.waitKey(1) & 0xFF
-            if pause_key == ord("q"):
-                break
-            elif pause_key == ord("m"):
-                toggle_camera_window()
-            elif pause_key == ord("t"):
-                toggle_floating_keyboard()
-            time.sleep(0.03)
+            if not SELECTING_POINT:
+                stop_drag()
+                reset_tracking()
+            report_status("SIN IMAGEN DE CÁMARA")
+            time.sleep(0.03)  # Avoid a busy loop when the device disconnects.
             continue
 
         frame = cv2.flip(frame, 1)
+        last_preview_frame = frame
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        current_gray_frame = gray.copy()
+        current_gray_frame = gray
         now = time.time()
-        frame_count += 1
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
+        res = face_mesh.process(rgb)  # Raw camera data, never overlays or text.
+        if not res.multi_face_landmarks:
+            if not SELECTING_POINT:
+                stop_drag()
+                reset_tracking()
+            last_move_time, dwell_progress = now, 0.0
+            mouth_open_prev, mouth_open_start, mouth_click_armed = False, None, False
+            wink_candidate, wink_candidate_frames = None, 0
+            report_status("BUSCANDO CARA · " + FACE_POINT)
+            present_camera(frame, "BUSCANDO CARA")
+            continue
 
-        # ====================================================
-        # Movimiento por Optical Flow
-        # ====================================================
-        if SELECTING_POINT:
-            cv2.putText(frame, "Click sobre nariz/entrecejo para seleccionar punto",
-                        (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 255, 255), 2)
-            cv2.putText(frame, "Recomendado: entrecejo, nariz, ceja o pomulo",
-                        (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            prev_gray = gray.copy()
+        lm = res.multi_face_landmarks[0].landmark
+        face_anchor = smooth_face_anchor(face_anchor_px(lm, frame.shape[1], frame.shape[0]))
+        selecting = SELECTING_POINT
+        if selecting:
+            # Seed the optical tracker on today's face position, not saved screen coordinates.
+            on_mouse(cv2.EVENT_LBUTTONDOWN, face_anchor[0], face_anchor[1], None, None)
+            last_move_time, dwell_progress = now, 0.0
+        else:
+            update_optical_tracking(gray, now)
+            apply_face_anchor_correction(face_anchor)
 
-        elif tracking_point is not None and prev_gray is not None:
-            next_point, status, err = cv2.calcOpticalFlowPyrLK(
-                prev_gray, gray, tracking_point, None, **lk_params
-            )
+        ratio_raw = mouth_open_ratio(lm)
+        gesture = detect_gesture(lm, ratio_raw, now)
+        if gesture is not None and not selecting and not SELECTING_POINT:
+            execute_action(GESTURE_ACTIONS.get(gesture, "Nada"))
 
-            if next_point is not None and status is not None and status[0][0] == 1:
-                old_x, old_y = tracking_point[0][0]
-                new_x, new_y = next_point[0][0]
-
-                # Suavizado del punto, no del mouse
-                if smooth_x is None:
-                    smooth_x, smooth_y = float(new_x), float(new_y)
-                else:
-                    smooth_x = (1 - POINT_SMOOTH_ALPHA) * smooth_x + POINT_SMOOTH_ALPHA * float(new_x)
-                    smooth_y = (1 - POINT_SMOOTH_ALPHA) * smooth_y + POINT_SMOOTH_ALPHA * float(new_y)
-
-                dx_cam = smooth_x - float(old_x)
-                dy_cam = smooth_y - float(old_y)
-
-                if abs(dx_cam) < DEADZONE_PX_CAMERA:
-                    dx_cam = 0.0
-                if abs(dy_cam) < DEADZONE_PX_CAMERA:
-                    dy_cam = 0.0
-
-                precision_scale = precision_scale_from_camera_delta(dx_cam, dy_cam)
-                dx_mouse = dx_cam * REL_GAIN_X * precision_scale
-                dy_mouse = dy_cam * REL_GAIN_Y * precision_scale
-
-                dist = math.hypot(dx_mouse, dy_mouse)
-                if dist > MAX_MOUSE_STEP:
-                    k = MAX_MOUSE_STEP / dist
-                    dx_mouse *= k
-                    dy_mouse *= k
-
-                if now >= suspend_move_until:
-                    if dx_mouse != 0.0 or dy_mouse != 0.0:
-                        cur_x, cur_y = pyautogui.position()
-                        tx = int(clamp_with_margin(cur_x + dx_mouse, 0, SCREEN_W - 1))
-                        ty = int(clamp_with_margin(cur_y + dy_mouse, 0, SCREEN_H - 1))
-                        pyautogui.moveTo(tx, ty)
-
-                        now_pos = pyautogui.position()
-                        dt = max(1e-6, time.time() - prev_speed_time)
-                        cursor_speed = math.hypot(
-                            now_pos[0] - prev_cursor_pos[0],
-                            now_pos[1] - prev_cursor_pos[1]
-                        ) / dt
-                        prev_cursor_pos = now_pos
-                        prev_speed_time = time.time()
-
-                # Actualizamos el punto con la posición SUAVIZADA para evitar drift raro
-                tracking_point = np.array([[[np.float32(smooth_x), np.float32(smooth_y)]]], dtype=np.float32)
-                last_good_point = (smooth_x, smooth_y)
-
-                draw_control_cross(frame, smooth_x, smooth_y)
-
-            else:
-                if last_face_anchor is not None and selected_anchor_offset is not None:
-                    recover_x = clamp(last_face_anchor[0] + selected_anchor_offset[0], 0, frame.shape[1] - 1)
-                    recover_y = clamp(last_face_anchor[1] + selected_anchor_offset[1], 0, frame.shape[0] - 1)
-                    smooth_x = float(recover_x)
-                    smooth_y = float(recover_y)
-                    tracking_point = np.array([[[np.float32(smooth_x), np.float32(smooth_y)]]], dtype=np.float32)
-                    last_good_point = (smooth_x, smooth_y)
-                    cv2.putText(frame, "Tracking recuperado con MediaPipe",
-                                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
-                    draw_control_cross(frame, smooth_x, smooth_y)
-                else:
-                    cv2.putText(frame, "Tracking perdido - presiona R o click en otro punto",
-                                (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-                    SELECTING_POINT = True
-                    tracking_point = None
-
-            prev_gray = gray.copy()
-
-        # ====================================================
-        # Gestos con MediaPipe
-        # Procesar todos los frames para estabilizar la lectura de párpados
-        # ====================================================
-        ratio_raw = 0.0
-        gesture = None
-
-        if frame_count % FACE_PROCESS_EVERY_N == 0:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            res = face_mesh.process(rgb)
-
-            if res.multi_face_landmarks:
-                lm = res.multi_face_landmarks[0].landmark
-                face_anchor = smooth_face_anchor(face_anchor_px(lm, frame.shape[1], frame.shape[0]))
-
-                ratio_raw = mouth_open_ratio(lm)
-                mouth_ratio_vis = 0.5 * mouth_ratio_vis + 0.5 * ratio_raw
-                mouth_open_now = ratio_raw >= SLOW_START_RATIO
-
-                gesture = detect_gesture(lm, ratio_raw, now)
-                apply_face_anchor_correction(face_anchor)
-
-                left_ear_vis = (1 - EAR_VIS_ALPHA) * left_ear_vis + EAR_VIS_ALPHA * last_left_ear
-                right_ear_vis = (1 - EAR_VIS_ALPHA) * right_ear_vis + EAR_VIS_ALPHA * last_right_ear
-
-                if gesture is not None:
-                    action_name = GESTURE_ACTIONS.get(gesture, "Nada")
-                    print(f"[GESTURE] {gesture} -> {action_name}")
-                    execute_action(action_name)
-
-        # ====================================================
-        # Dwell click
-        # ====================================================
-        if DWELL_ENABLED:
+        if DWELL_ENABLED and not SELECTING_POINT:
             current_cursor_pos = pyautogui.position()
-
-            moved_px = math.hypot(
-                current_cursor_pos[0] - last_cursor_pos[0],
-                current_cursor_pos[1] - last_cursor_pos[1]
-            )
-
+            moved_px = math.hypot(current_cursor_pos[0]-last_cursor_pos[0],
+                                  current_cursor_pos[1]-last_cursor_pos[1])
             if moved_px > DWELL_STILL_RADIUS_PX:
                 last_move_time = now
                 last_cursor_pos = current_cursor_pos
                 dwell_progress = 0.0
             else:
-                dwell_elapsed = now - last_move_time
-                dwell_progress = clamp(dwell_elapsed / DWELL_CLICK_SEC, 0.0, 1.0)
-
-                if dwell_elapsed >= DWELL_CLICK_SEC:
-                    if (now - last_dwell_click_time) >= DWELL_POST_CLICK_DELAY:
-                        print("[DWELL] CLICK")
-                        do_click()
-                        last_dwell_click_time = now
-                        last_move_time = now
-                        last_cursor_pos = pyautogui.position()
-                        dwell_progress = 0.0
+                elapsed = now-last_move_time
+                dwell_progress = clamp(elapsed/DWELL_CLICK_SEC, 0.0, 1.0)
+                if elapsed >= DWELL_CLICK_SEC and now-last_dwell_click_time >= DWELL_POST_CLICK_DELAY:
+                    do_click()
+                    last_dwell_click_time = last_move_time = now
+                    last_cursor_pos = pyautogui.position()
+                    dwell_progress = 0.0
         else:
             dwell_progress = 0.0
 
-        # ====================================================
-        # Auto zoom simple
-        # ====================================================
         if AUTO_ZOOM_ENABLED:
             if cursor_speed < 30 and not zoom_active:
                 zoom_in_windows()
             elif cursor_speed > 80 and zoom_active:
                 zoom_out_windows()
 
-        # ====================================================
-        # Overlay visual
-        # ====================================================
-        if SHOW_OVERLAY:
-            status = (
-                f"OPTICAL MVP | X:{SENS_LEVELS[CURRENT_SENS_X_INDEX]}+{CUSTOM_SENS_X_STEPS} Y:{SENS_LEVELS[CURRENT_SENS_Y_INDEX]}+{CUSTOM_SENS_Y_STEPS} | "
-                f"gain=({REL_GAIN_X:.1f},{REL_GAIN_Y:.1f}) | "
-                f"wink:{WINK_DIFF_LEVELS[CURRENT_WINK_DIFF_INDEX]}<{WINK_CLOSED_RATIO_THR:.2f} | "
-                f"tracking={'SELECT' if SELECTING_POINT else 'OK'} | "
-                f"mouth={GESTURE_ACTIONS['mouth']} winkL={GESTURE_ACTIONS['wink_left']} winkR={GESTURE_ACTIONS['wink_right']} | "
-                f"dwell={'ON' if DWELL_ENABLED else 'OFF'}"
-            )
-            cv2.putText(frame, status, (10, 25),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 255, 255), 2)
-
-            cv2.putText(frame, f"EAR L:{last_left_ear:.3f} R:{last_right_ear:.3f} | norm L:{left_eye_open_norm:.2f} R:{right_eye_open_norm:.2f} | Mouth:{ratio_raw:.3f}",
-                        (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 220, 120), 2)
-
-            draw_wink_debug(frame, left_eye_open_norm, right_eye_open_norm, last_eye_diff)
-
-            if not wink_calibrated:
-                draw_text_with_shadow(frame, "MANTENE AMBOS OJOS ABIERTOS PARA CALIBRAR",
-                                      (20, 90), 0.62, (0, 255, 255), 2)
-
-            if wink_warning_text and now < wink_warning_until:
-                draw_text_with_shadow(frame, wink_warning_text,
-                                      (20, 120), 0.62, (0, 180, 255), 2)
-
-            cv2.putText(frame, "Esc/F10 libera | F12 salir | F7 centro | R punto | K calib | F9/T teclado | B burbuja | F5/F6 guino",
-                        (10, frame.shape[0] - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 220), 2)
-
-        if now - last_debug_print > 0.5:
-            print(
-                f"[STATE] tracking={'SELECT' if SELECTING_POINT else 'OK'} | "
-                f"cursor_speed={cursor_speed:.1f} | dwell={dwell_progress:.2f}"
-            )
-            last_debug_print = now
-
-        draw_status(frame, "ELEGIR PUNTO" if SELECTING_POINT else "CONTROL ACTIVO",
-                    "warning" if SELECTING_POINT else "success")
-        cv2.imshow(WINDOW_NAME, frame)
-        k = cv2.waitKey(1) & 0xFF
-
-        if k == ord("q"):
-            break
-        elif k == ord("r"):
-            reset_tracking()
-        elif k == 27:
-            release_all_inputs(close_context_menu=True)
-        elif k == ord("m"):
-            toggle_camera_window()
-        elif k == ord("t"):
-            toggle_floating_keyboard()
-        elif k == ord("b"):
-            toggle_floating_actions()
-        elif k == ord("k"):
-            reset_wink_calibration()
-        elif k == ord("c"):
-            center_mouse()
+        state = "ACTIVO · " + FACE_POINT if wink_calibrated else "CALIBRANDO · mantené los ojos abiertos"
+        report_status(state)
+        present_camera(frame, state)
 
 finally:
+    if action_audio is not None:
+        action_audio.close()
+    release_all_inputs(close_context_menu=False)
     try:
         if zoom_active:
             zoom_out_windows()

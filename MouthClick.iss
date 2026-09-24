@@ -1,7 +1,10 @@
 ﻿#define MyAppName "MouthClick"
-#define MyAppVersion "1.0.0"
-#define MyAppPublisher "FundaciÃ³n TeletÃ³n"
+#define MyAppVersion "1.2.0"
+#define MyAppPublisher "Fundación Teletón"
 #define MyAppExeName "MouthClick.exe"
+#ifndef AppSource
+  #define AppSource "dist\MouthClick"
+#endif
 
 [Setup]
 AppId={{5EAF982C-50B1-46DF-96D5-BF87557D31B4}
@@ -12,6 +15,7 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={localappdata}\Programs\MouthClick
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
+MinVersion=10.0
 
 OutputDir=installer
 OutputBaseFilename=MouthClick_Setup
@@ -30,10 +34,11 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Crear un acceso directo en el escritorio"; GroupDescription: "Accesos directos:"; Flags: unchecked
-Name: "startup"; Description: "Iniciar MouthClick al iniciar sesiÃ³n en Windows"; GroupDescription: "Inicio automÃ¡tico:"; Flags: unchecked
+Name: "startup"; Description: "Iniciar MouthClick al iniciar sesión en Windows"; GroupDescription: "Inicio automático:"; Flags: unchecked
 
 [Files]
-Source: "dist\MouthClick\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#AppSource}\*"; DestDir: "{app}"; Excludes: "profiles.json"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#AppSource}\profiles.json"; DestDir: "{app}"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 Name: "{group}\MouthClick"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
