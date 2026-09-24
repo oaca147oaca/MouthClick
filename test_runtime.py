@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import sys
 from pathlib import Path
 import queue
 import tempfile
@@ -19,6 +20,7 @@ import cv2
 import numpy as np
 from mouthclick_runtime import (ActionAudio, FACE_POINTS, RANGES, SettingsSession,
                                atomic_save_profiles, point_pixels, validated, wave_bytes, gain_index, step_gain)
+from mouthclick_runtime import BrowGestures, profile_save_name
 
 SOURCE = Path(__file__).with_name("mouthclick_mvp_opticalflow.py").read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
@@ -28,7 +30,9 @@ def isolated_app():
     mouse = Mock()
     mouse.size.return_value = (1920, 1080)
     mouse.position.return_value = (500, 500)
-    env = dict(os=os, json=json, math=math, ctypes=ctypes, time=time, queue=queue, cv2=cv2, np=np,
+    native = Mock()
+    native.windll.user32.GetAsyncKeyState.return_value = 0
+    env = dict(os=os, sys=sys, json=json, math=math, ctypes=native, time=time, queue=queue, cv2=cv2, np=np, BrowGestures=BrowGestures, profile_save_name=profile_save_name,
                pyautogui=mouse, FACE_POINTS=FACE_POINTS, RANGES=RANGES, validated=validated,
                point_pixels=point_pixels, atomic_save_profiles=atomic_save_profiles, gain_index=gain_index, step_gain=step_gain,
                keyboard=SimpleNamespace(Key=SimpleNamespace(**{name: name for name in
@@ -47,6 +51,78 @@ def isolated_app():
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_tiny_alternating_camera_noise_does_not_move_cursor(self):
+        app = self.app
+        app["current_gray_frame"] = np.zeros((480,640),np.uint8)
+        app["on_mouse"](cv2.EVENT_LBUTTONDOWN,200.,150.,None,None)
+        fake = Mock(wraps=cv2)
+        app["cv2"] = fake
+        for i in range(100):
+            delta = .24 if i%2 else -.24
+            point = app["tracking_point"]+np.array([[[delta,delta]]],np.float32)
+            fake.calcOpticalFlowPyrLK.return_value=(point,np.array([[1]]),None)
+            app["update_optical_tracking"](app["current_gray_frame"],time.time())
+        app["pyautogui"].moveTo.assert_not_called()
+        point = app["tracking_point"]+np.array([[[1.,1.]]],np.float32)
+        fake.calcOpticalFlowPyrLK.return_value=(point,np.array([[1]]),None)
+        app["update_optical_tracking"](app["current_gray_frame"],time.time())
+        app["pyautogui"].moveTo.assert_called_once()
+
+    def test_release_does_not_synthesize_unpressed_right_button(self):
+        app = self.app
+        app["release_all_inputs"](False)
+        app["pyautogui"].mouseUp.assert_called_once_with(button="left")
+        app["ctypes"].windll.user32.GetAsyncKeyState.return_value = 0x8000
+        app["release_all_inputs"](False)
+        app["pyautogui"].mouseUp.assert_called_with(button="right")
+
+    def test_default_profile_is_copied_on_change(self):
+        base = self.app["normalize_profile"]({})
+        profiles = {"Por Defecto": base, "Personalizado 1": base}
+        self.assertEqual(profile_save_name(profiles,"Por Defecto",base),"Por Defecto")
+        self.assertEqual(profile_save_name(profiles,"Por Defecto",{**base,"gain_x":80}),"Personalizado 2")
+        self.assertNotEqual(base["gain_x"],80)
+
+    def test_brows_require_hold_and_neutral_before_repeat(self):
+        detector = BrowGestures()
+        for i in range(45):
+            self.assertIsNone(detector.update(1,1,i/30))
+        self.assertIsNone(detector.update(1.4,1,2))
+        self.assertEqual(detector.update(1.4,1,2.4), "brow_raise")
+        self.assertIsNone(detector.update(1.4,1,3))
+        detector.update(1,1,4)
+        detector.update(.8,.8,5)
+        self.assertEqual(detector.update(.8,.8,5.4), "brow_frown")
+        self.assertIsNone(detector.update(.8,.8,6))
+
+    def test_startup_prefers_saved_profile_and_allows_config(self):
+        app = self.app
+        app["load_profiles"] = Mock(return_value={"Octavio": {}, "Otro": {"startup_default": True}})
+        app["show_gui_menu"] = Mock(return_value={"menu": True})
+        app["sys"] = SimpleNamespace(argv=["app"])
+        self.assertEqual(app["startup_config"]()["_profile_name"], "Otro")
+        app["load_profiles"].return_value = {"Octavio": {}}
+        self.assertEqual(app["startup_config"]()["_profile_name"], "Octavio")
+        app["sys"].argv.append("--config")
+        self.assertEqual(app["startup_config"](), {"menu": True})
+        app["sys"].argv = ["app"]
+        app["load_profiles"].return_value = {"Default": {}}
+        self.assertEqual(app["startup_config"](), {"menu": True})
+
+    def test_pause_cancels_menu_again_and_blocks_right_click(self):
+        app = self.app
+        app["floating_keyboard_root"] = Mock()
+        app["toggle_pause"]()
+        app["floating_keyboard_root"].after.assert_called_once()
+        app["dismiss_paused_menu"]()
+        self.assertEqual(app["pyautogui"].press.call_count, 2)
+        app["do_right_click"]()
+        app["execute_gesture"]("wink_right")
+        app["pyautogui"].click.assert_not_called()
+        app["toggle_pause"]()
+        app["dismiss_paused_menu"]()
+        self.assertEqual(app["pyautogui"].press.call_count, 2)
+
     def setUp(self):
         self.app = isolated_app()
         self.current = self.app["runtime_snapshot"]()
@@ -209,7 +285,93 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(app["RUNNING"])
         app["request_exit"]()
         self.assertFalse(app["RUNNING"])
-        app["pyautogui"].press.assert_not_called()
+        app["pyautogui"].press.assert_called_once_with("esc")
+
+    def test_gesture_fixes_bubble_without_clicking_desktop(self):
+        app = self.app
+        bubble = Mock(moving=True)
+        app["floating_actions_root"] = bubble
+        app["GESTURE_ACTIONS"]["wink_left"] = "Click izquierdo"
+        app["execute_gesture"]("wink_left")
+        bubble.stop_moving.assert_called_once()
+        app["pyautogui"].click.assert_not_called()
+
+    def test_confirmation_defers_pause_and_exit(self):
+        app = self.app
+        dialog = Mock()
+        dialog.winfo_exists.return_value = False
+        app["ConfirmAction"] = Mock(return_value=dialog)
+        app["on_press"]("f11")
+        self.assertFalse(app["PAUSED"])
+        app["ConfirmAction"].call_args.args[-1]()
+        self.assertTrue(app["PAUSED"])
+        app["on_press"]("f11")
+        self.assertFalse(app["PAUSED"])
+        app["on_press"]("f12")
+        self.assertTrue(app["RUNNING"])
+        app["ConfirmAction"].call_args.args[-1]()
+        self.assertFalse(app["RUNNING"])
+
+    def test_typing_m_and_b_does_not_open_camera_or_hide_bubble(self):
+        app = self.app
+        app["toggle_camera_window"] = Mock()
+        app["toggle_floating_actions"] = Mock()
+        for char in "mMbB":
+            app["on_press"](SimpleNamespace(char=char))
+        app["toggle_camera_window"].assert_not_called()
+        app["toggle_floating_actions"].assert_not_called()
+        self.assertFalse(app["CAMERA_VISIBLE"])
+
+    def test_bubble_action_only_shows(self):
+        app = self.app
+        bubble = Mock()
+        app["floating_actions_root"] = bubble
+        for _ in range(2):
+            app["toggle_floating_actions"]()
+        self.assertTrue(app["FLOATING_ACTIONS_VISIBLE"])
+        self.assertEqual(bubble.deiconify.call_count, 2)
+        bubble.withdraw.assert_not_called()
+
+    def test_drag_mode_repeated_pickup_drop_and_disable(self):
+        app = self.app
+        app["action_debounced"] = Mock(return_value=False)
+        app["GESTURE_ACTIONS"]["wink_left"] = "Click izquierdo"
+        app["toggle_drag_mode"]()
+        for _ in range(2):
+            app["execute_gesture"]("wink_left")
+            self.assertTrue(app["drag_active"])
+            app["execute_gesture"]("wink_left")
+            self.assertFalse(app["drag_active"])
+            self.assertTrue(app["drag_mode"])
+        app["execute_gesture"]("wink_left")
+        app["toggle_drag_mode"]()
+        self.assertFalse(app["drag_active"])
+        app["execute_gesture"]("wink_left")
+        app["pyautogui"].click.assert_called_once()
+
+    def test_office_and_controls_keep_normal_click(self):
+        app = self.app
+        app["action_debounced"] = Mock(return_value=False)
+        original = dict(app["GESTURE_ACTIONS"])
+        app["toggle_drag_mode"]()
+        app["toggle_office_mode"]()
+        self.assertFalse(app["drag_mode"])
+        app["execute_gesture"]("wink_left")
+        app["pyautogui"].hotkey.assert_called_with("ctrl", "c")
+        app["execute_gesture"]("wink_right")
+        app["pyautogui"].hotkey.assert_called_with("ctrl", "v")
+        app["execute_gesture"]("mouth")
+        app["pointer_over_controls"] = Mock(return_value=True)
+        app["execute_gesture"]("wink_right")
+        self.assertEqual(app["pyautogui"].hotkey.call_count, 2)
+        self.assertEqual(app["pyautogui"].click.call_count, 2)
+        app["toggle_office_mode"]()
+        self.assertEqual(original, app["GESTURE_ACTIONS"])
+        app["toggle_drag_mode"]()
+        app["execute_action"]("Drag toggle")
+        self.assertFalse(app["drag_active"])
+        app["execute_action"]("Click derecho")
+        self.assertEqual(app["pyautogui"].click.call_count, 4)
 
     def test_sound_is_valid_wav(self):
         with wave.open(io.BytesIO(wave_bytes([(880,90)]))) as wav:

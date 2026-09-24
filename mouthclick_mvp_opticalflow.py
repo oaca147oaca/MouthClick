@@ -1,4 +1,8 @@
 import os
+import sys
+from mouthclick_instance import acquire
+if not acquire():
+    raise SystemExit(0)
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 os.environ["OPENCV_LOG_LEVEL"] = "SILENT"
 
@@ -13,11 +17,14 @@ import pyautogui
 import tkinter as tk
 from tkinter import ttk
 from mouthclick_ui import Menu, field, toggle, hint, style_floating, draw_status, ActionsBubble
+from mouthclick_ui import PagedMenu
 from pynput import keyboard
 import queue
 from tkinter import messagebox
 from mouthclick_runtime import FACE_POINTS, RANGES, validated, point_pixels, atomic_save_profiles, ActionAudio, gain_index, step_gain
-from mouthclick_live_ui import LiveSettings, numeric
+from mouthclick_live_ui import LiveSettings, numeric, ConfirmAction, WindowChrome
+from mouthclick_runtime import BrowGestures
+from mouthclick_runtime import profile_save_name
 
 try:
     from pygrabber.dshow_graph import FilterGraph
@@ -90,6 +97,8 @@ DEFAULT_PROFILE = {
     "mouth": "Click izquierdo",
     "wink_left": "Nada",
     "wink_right": "Nada",
+    "brow_raise": "Nada",
+    "brow_frown": "Nada",
     "camera": 0,
     "sens_x": "media",
     "sens_y": "media",
@@ -180,16 +189,19 @@ def get_camera_options():
     return cam_names, cam_map
 
 
-def show_gui_menu():
-    window = tk.Tk()
+def show_gui_menu(master=None, on_saved=None):
+    window = tk.Toplevel(master) if master is not None else tk.Tk()
     profiles = load_profiles()
     if not profiles:
         profiles = {"Default": DEFAULT_PROFILE.copy()}
-    selected_profile = tk.StringVar(value=list(profiles.keys())[0])
+    initial = ACTIVE_PROFILE if master is not None and ACTIVE_PROFILE in profiles else list(profiles.keys())[0]
+    selected_profile = tk.StringVar(value=initial)
     profile_name_var = tk.StringVar(value=selected_profile.get())
     mouth_action_var = tk.StringVar(value="Click izquierdo")
     wink_left_action_var = tk.StringVar(value="Nada")
     wink_right_action_var = tk.StringVar(value="Nada")
+    brow_raise_var = tk.StringVar(value="Nada")
+    brow_frown_var = tk.StringVar(value="Nada")
     sens_x_var = tk.StringVar(value=DEFAULT_PROFILE["sens_x"])
     sens_y_var = tk.StringVar(value=DEFAULT_PROFILE["sens_y"])
     stabilize_var = tk.BooleanVar(value=True)
@@ -204,27 +216,35 @@ def show_gui_menu():
     cam_names, cam_map = get_camera_options()
     cam_index_var = tk.StringVar(value=cam_names[0] if cam_names else "Cam 0")
     selected_config = {}
-    ui = Menu(window)
+    ui = PagedMenu(window)
     profile = ui.card("Tu perfil")
     profile_combo = field(profile, "Perfil guardado", selected_profile, list(profiles.keys()))
     field(profile, "Nombre para guardar / nuevo perfil", profile_name_var)
     hint(profile, "Tus ajustes se guardan al comenzar el control.")
     camera = ui.card("Cámara y seguimiento")
-    field(camera, "Cámara", cam_index_var, cam_names)
+    camera_control = field(camera, "Cámara", cam_index_var, cam_names)
+    if master is not None:
+        camera_control.configure(state="disabled")
+        hint(camera, "Para cambiar la cámara, cerrá la sesión y abrí Configurar MouthClick.")
     field(camera, "Punto facial que mueve el cursor", tracking_mode_var, list(FACE_POINTS))
-    hint(camera, "El punto se detecta automáticamente. La vista de cámara permanece oculta; M permite verla si necesitás comprobar la posición.")
+    hint(camera, "El punto se detecta automáticamente. La vista de cámara permanece oculta.")
     gestures = ui.card("Acciones por gesto")
     field(gestures, "Boca", mouth_action_var, AVAILABLE_ACTIONS)
     field(gestures, "Guiño izquierdo", wink_left_action_var, AVAILABLE_ACTIONS)
     field(gestures, "Guiño derecho", wink_right_action_var, AVAILABLE_ACTIONS)
+    brows = ui.card("Cejas · gestos experimentales")
+    field(brows, "Levantar las cejas", brow_raise_var, AVAILABLE_ACTIONS)
+    field(brows, "Fruncir el ceño", brow_frown_var, AVAILABLE_ACTIONS)
+    hint(brows, "Al comenzar, mantené el rostro relajado unos segundos para calibrar. Nada desactiva el gesto.")
     motion = ui.card("Movimiento del cursor")
     field(motion, "Sensibilidad horizontal · Eje X", sens_x_var, SENS_LEVELS)
     field(motion, "Sensibilidad vertical · Eje Y", sens_y_var, SENS_LEVELS)
-    numeric(motion, "Ajuste fino horizontal · X", gain_x_var, "gain_x")
-    numeric(motion, "Ajuste fino vertical · Y", gain_y_var, "gain_y")
+    fine = ui.card("Ajuste fino y estabilidad")
+    numeric(fine, "Ajuste fino horizontal · X", gain_x_var, "gain_x")
+    numeric(fine, "Ajuste fino vertical · Y", gain_y_var, "gain_y")
     sens_x_var.trace_add("write", lambda *args: gain_x_var.set(GAIN_X_BY_LEVEL.get(sens_x_var.get(), 62)))
     sens_y_var.trace_add("write", lambda *args: gain_y_var.set(GAIN_Y_BY_LEVEL.get(sens_y_var.get(), 52)))
-    toggle(motion, "Suavizado del punto óptico", stabilize_var)
+    toggle(fine, "Suavizado del punto óptico", stabilize_var)
     wink = ui.card("Precisión del guiño")
     field(wink, "Sensibilidad del guiño", wink_diff_sens_var, WINK_DIFF_LEVELS)
     hint(wink, "Más sensible detecta un cierre menor. Más estricto exige cerrar más el ojo y reduce falsos positivos.")
@@ -241,6 +261,8 @@ def show_gui_menu():
         mouth_action_var.set(p.get("mouth", "Click izquierdo"))
         wink_left_action_var.set(p.get("wink_left", "Nada"))
         wink_right_action_var.set(p.get("wink_right", "Nada"))
+        brow_raise_var.set(p.get("brow_raise", "Nada"))
+        brow_frown_var.set(p.get("brow_frown", "Nada"))
         sens_x_var.set(p.get("sens_x", DEFAULT_PROFILE["sens_x"]))
         sens_y_var.set(p.get("sens_y", DEFAULT_PROFILE["sens_y"]))
         stabilize_var.set(bool(p.get("stabilize", True)))
@@ -253,7 +275,7 @@ def show_gui_menu():
         sound_var.set(p.get("sound_enabled", True))
         dwell_enabled_var.set(p.get("dwell_enabled", False))
 
-        cam_idx = int(p.get("camera", 0))
+        cam_idx = CAMERA_INDEX if master is not None else int(p.get("camera", 0))
         for name, idx in cam_map.items():
             if idx == cam_idx:
                 cam_index_var.set(name)
@@ -270,7 +292,10 @@ def show_gui_menu():
             "mouth": mouth_action_var.get(),
             "wink_left": wink_left_action_var.get(),
             "wink_right": wink_right_action_var.get(),
-            "camera": cam_map.get(cam_index_var.get(), 0),
+            "brow_raise": brow_raise_var.get(),
+            "brow_frown": brow_frown_var.get(),
+            "startup_default": True,
+            "camera": CAMERA_INDEX if master is not None else cam_map.get(cam_index_var.get(), 0),
             "sens_x": sens_x_var.get(),
             "sens_y": sens_y_var.get(),
             "sensitivity": sens_x_var.get(),  # compatibilidad
@@ -288,7 +313,9 @@ def show_gui_menu():
 
         try:
             p = validated(p)
-            updated = {**profiles, name: p}
+            name = profile_save_name({k:normalize_profile(v) for k,v in profiles.items()}, name, p)
+            updated = {key: {**value, "startup_default": False} for key,value in profiles.items()}
+            updated[name] = p
             save_profiles(updated)
         except (ValueError, OSError) as exc:
             messagebox.showerror("No se pudo guardar", str(exc), parent=window)
@@ -297,13 +324,19 @@ def show_gui_menu():
 
         selected_config.update(p)
         selected_config["_profile_name"] = name
-        window.quit()
+        if master is None:
+            window.quit()
         window.destroy()
+        if on_saved is not None:
+            on_saved(selected_config)
 
     profile_combo.bind("<<ComboboxSelected>>", on_profile_selected)
     apply_profile(selected_profile.get())
-    ui.finish(start, "F11: pausa / continuar · F12: salir · Esc / F10: liberar entradas\nF7: centrar · R: recuperar punto · K: recalibrar guiño\nF9: teclado · B: accesos rápidos · M: mostrar / ocultar cámara\nF1/F2: sensibilidad Y · F3/F4: sensibilidad X · F5/F6: sensibilidad del guiño")
-    window.state("zoomed")
+    ui.finish(start, "F11: pausa / continuar · F12: salir · Esc / F10: liberar entradas\nF7: centrar · R: recuperar punto · K: recalibrar guiño\nF9: teclado · B: accesos rápidos · M: mostrar / ocultar cámara\nF1/F2: sensibilidad Y · F3/F4: sensibilidad X · F5/F6: sensibilidad del guiño", editing=master is not None)
+    chrome = WindowChrome(window, window.destroy, "MouthClick · Elegir perfil")
+    chrome.maximize()
+    if master is not None:
+        return window
     window.mainloop()
 
     if not selected_config:
@@ -313,12 +346,25 @@ def show_gui_menu():
 
 
 
-CONFIG = show_gui_menu()
+def startup_config():
+    profiles = load_profiles()
+    if "--config" not in sys.argv:
+        preferred = next((name for name,p in profiles.items() if p.get("startup_default")), None)
+        preferred = preferred or next((name for name in profiles if name == "Por Defecto"), None)
+        preferred = preferred or next((name for name in profiles if name.casefold() == "octavio"), None)
+        if preferred is not None:
+            return {**normalize_profile(profiles[preferred]), "_profile_name": preferred}
+    return show_gui_menu()
+
+
+CONFIG = startup_config()
 
 GESTURE_ACTIONS = {
     "mouth": CONFIG["mouth"],
     "wink_left": CONFIG["wink_left"],
     "wink_right": CONFIG["wink_right"],
+    "brow_raise": CONFIG.get("brow_raise", "Nada"),
+    "brow_frown": CONFIG.get("brow_frown", "Nada"),
 }
 
 CAMERA_INDEX = int(CONFIG["camera"])
@@ -682,6 +728,8 @@ def do_click():
 
 def do_right_click():
     global suspend_move_until
+    if PAUSED:
+        return
     x, y = pyautogui.position()
     suspend_move_until = time.time() + FREEZE_ON_GESTURE_SEC
     pyautogui.click(x=x, y=y, button="right")
@@ -722,7 +770,9 @@ def release_all_inputs(close_context_menu=True):
     global drag_active, suspend_move_until
     try:
         pyautogui.mouseUp(button="left")
-        pyautogui.mouseUp(button="right")
+        # A synthetic right-button release can itself open a Windows context menu.
+        if ctypes.windll.user32.GetAsyncKeyState(0x02) & 0x8000:
+            pyautogui.mouseUp(button="right")
     except Exception:
         pass
     drag_active = False
@@ -758,13 +808,76 @@ def play_action_sound(action_name):
         action_audio.play(action_name)
 
 
+drag_mode = False
+office_mode = False
+
+
+def pointer_over_controls():
+    x, y = pyautogui.position()
+    for window in (floating_actions_root, floating_keyboard_root, live_settings_window, confirmation_window, main_menu_window):
+        if window is not None and window.winfo_exists() and window.winfo_viewable():
+            if window.winfo_rootx() <= x < window.winfo_rootx()+window.winfo_width() and window.winfo_rooty() <= y < window.winfo_rooty()+window.winfo_height():
+                return True
+    return False
+
+
+def update_mode_buttons():
+    if floating_actions_root is not None:
+        floating_actions_root.set_modes(drag_mode, office_mode)
+
+
+def toggle_drag_mode():
+    global drag_mode, office_mode
+    stop_drag()
+    drag_mode = not drag_mode
+    office_mode = False
+    update_mode_buttons()
+
+
+def toggle_office_mode():
+    global drag_mode, office_mode
+    stop_drag()
+    office_mode = not office_mode
+    drag_mode = False
+    update_mode_buttons()
+
+
+def execute_gesture(gesture):
+    if PAUSED or not RUNNING:
+        return
+    action = GESTURE_ACTIONS.get(gesture, "Nada")
+    if floating_actions_root is not None and floating_actions_root.moving and (action != "Nada" or office_mode):
+        floating_actions_root.stop_moving()
+        return
+    if pointer_over_controls() and (action != "Nada" or office_mode):
+        execute_action("Click izquierdo")
+    elif office_mode:
+        if action_debounced("office:"+gesture):
+            return
+        if gesture in ("wink_left", "wink_right"):
+            stop_drag()
+            pyautogui.hotkey("ctrl", "c" if gesture == "wink_left" else "v")
+            play_action_sound("Click izquierdo")
+        elif gesture == "mouth":
+            do_click()
+    else:
+        execute_action(action)
+
+
 def execute_action(action_name):
     if action_name == "Nada":
         return
     if action_debounced(action_name):
         return
-    if action_name == "Click izquierdo":
+    if pointer_over_controls():
+        stop_drag()
         do_click()
+        return
+    if action_name == "Click izquierdo":
+        if drag_mode:
+            stop_drag() if drag_active else start_drag()
+        else:
+            do_click()
     elif action_name == "Doble click":
         do_double_click()
     elif action_name == "Click derecho":
@@ -1045,14 +1158,14 @@ def toggle_floating_keyboard():
 
 def toggle_floating_actions():
     global FLOATING_ACTIONS_VISIBLE
-    FLOATING_ACTIONS_VISIBLE = not FLOATING_ACTIONS_VISIBLE
+    FLOATING_ACTIONS_VISIBLE = True
     if floating_actions_root is None:
         return
-    if FLOATING_ACTIONS_VISIBLE:
-        floating_actions_root.deiconify()
-    else:
-        floating_actions_root.withdraw()
-    print(f"[ACTIONS] {'ON' if FLOATING_ACTIONS_VISIBLE else 'OFF'}")
+    floating_actions_root.deiconify()
+    floating_actions_root.attributes("-topmost", True)
+    floating_actions_root.lift()
+    floating_actions_root.expand()
+
 
 
 def create_quick_actions_bubble():
@@ -1061,16 +1174,17 @@ def create_quick_actions_bubble():
         return None
     try:
         items = [
-            ("Esc", lambda: None if keyboard_debounced("bubble:esc") else release_all_inputs(close_context_menu=True)),
             ("Click", lambda: None if keyboard_debounced("bubble:click") else do_click()),
             ("Derecho", lambda: None if keyboard_debounced("bubble:right") else do_right_click()),
-            ("Drag", lambda: None if keyboard_debounced("bubble:drag") else (stop_drag() if drag_active else start_drag())),
+            ("Drag", lambda: None if keyboard_debounced("bubble:drag") else toggle_drag_mode()),
+            ("Oficina", toggle_office_mode),
             ("Teclado", toggle_floating_keyboard),
             ("Sensibilidades", open_live_settings),
+            ("Menú principal", open_main_menu),
             ("Calib", reset_wink_calibration),
             ("Centro", center_mouse),
-            ("Pausa", toggle_pause),
-            ("Salir", request_exit),
+            ("Pausa", lambda: confirm_control("pause")),
+            ("Salir", lambda: confirm_control("exit")),
         ]
         def remember_pos(x, y):
             global floating_actions_pos
@@ -1087,6 +1201,7 @@ def create_quick_actions_bubble():
         root = ActionsBubble(floating_keyboard_root, items, floating_actions_pos,
                              remember_pos, schedule_collapse, cancel_collapse)
         root.set_paused(PAUSED)
+        root.set_modes(drag_mode, office_mode)
         root.protocol("WM_DELETE_WINDOW", toggle_floating_actions)
         make_window_no_activate(root, remember_as_keyboard=False)
         floating_actions_root = root
@@ -1232,16 +1347,23 @@ def create_floating_keyboard():
         return None
 
 
+last_bubble_check = 0.0
+
+
 def update_floating_keyboard():
     try:
-        global floating_actions_collapse_after
+        global floating_actions_collapse_after, last_bubble_check
         remember_keyboard_target()
         if floating_keyboard_root is not None:
             update_keyboard_move_mode()
-            floating_keyboard_root.update_idletasks()
             floating_keyboard_root.update()
         if floating_actions_root is not None:
-            floating_actions_root.update_idletasks()
+            if time.monotonic()-last_bubble_check >= 0.5:
+                last_bubble_check = time.monotonic()
+                if floating_actions_root.state() != "normal":
+                    floating_actions_root.deiconify()
+                floating_actions_root.attributes("-topmost", True)
+                floating_actions_root.lift()
             if floating_actions_collapse_after and time.time() >= floating_actions_collapse_after:
                 try:
                     floating_actions_root.collapse_now()
@@ -1282,6 +1404,8 @@ def reset_tracking():
 
 
 def reset_wink_calibration():
+    global brow_detector
+    brow_detector = None
     global left_open_baseline, right_open_baseline, wink_calibrated, wink_calibration_samples
     global smooth_left_ear, smooth_right_ear, smooth_eye_diff
     global left_eye_open_norm, right_eye_open_norm, wink_candidate, wink_candidate_frames
@@ -1365,7 +1489,26 @@ def adapt_open_eye_baseline(left, right, left_norm, right_norm):
         right_open_baseline = (1 - WINK_BASELINE_ADAPT_ALPHA) * right_open_baseline + WINK_BASELINE_ADAPT_ALPHA * right
 
 
+brow_detector = None
+
+
 def detect_gesture(lm, ratio_raw, now):
+    global brow_detector
+    primary = detect_primary_gesture(lm, ratio_raw, now)
+    if all(GESTURE_ACTIONS.get(key, "Nada") == "Nada" for key in ("brow_raise", "brow_frown")):
+        return primary
+    if brow_detector is None:
+        brow_detector = BrowGestures()
+    def distance(a,b):
+        return math.hypot(lm[a].x-lm[b].x,lm[a].y-lm[b].y)
+    width = max(distance(33,263), 1e-6)
+    height = (distance(105,159)+distance(334,386))/(2*width)
+    gap = distance(107,336)/width
+    brow = brow_detector.update(height,gap,now, primary is None and ratio_raw < SLOW_START_RATIO and left_eye_open_norm > .85 and right_eye_open_norm > .85)
+    return primary or brow
+
+
+def detect_primary_gesture(lm, ratio_raw, now):
     global mouth_open_prev, mouth_open_start, mouth_click_armed
     global last_click_time, last_wink_time
     global last_left_ear, last_right_ear, last_eye_diff
@@ -1493,7 +1636,7 @@ def open_camera(index):
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 60)
+    cap.set(cv2.CAP_PROP_FPS, 30)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     print(f"[INFO] Cámara abierta en índice {index}")
@@ -1524,13 +1667,50 @@ def on_mouse(event, x, y, flags, param):
         print(f"[TRACK] Punto seleccionado: x={x}, y={y}")
 
 
+confirmation_window = None
+
+
+def confirm_control(action):
+    global confirmation_window
+    if confirmation_window is not None and confirmation_window.winfo_exists():
+        confirmation_window.lift()
+        return
+    if action == "pause" and PAUSED:
+        toggle_pause()
+        return
+    title = "¿Pausar el control facial?" if action == "pause" else "¿Cerrar MouthClick?"
+    explanation = ("Para continuar necesitarás F11 o un dispositivo físico para pulsar Continuar."
+                   if action == "pause" else
+                   "Para volver a usar el control facial necesitarás abrir la app con ayuda o un dispositivo físico. Guardá tus ajustes antes de salir.")
+    confirmation_window = ConfirmAction(floating_keyboard_root, title, explanation,
+                                        toggle_pause if action == "pause" else request_exit)
+
+
 def toggle_pause():
     global PAUSED
     release_all_inputs(close_context_menu=False)
+    if floating_actions_root is not None:
+        floating_actions_root.stop_moving()
     PAUSED = not PAUSED
+    if PAUSED:
+        dismiss_paused_menu()
+        if floating_keyboard_root is not None:
+            floating_keyboard_root.after(200, dismiss_paused_menu)
     reset_tracking()
     if floating_actions_root is not None:
         floating_actions_root.set_paused(PAUSED)
+
+
+def dismiss_paused_menu():
+    if not PAUSED:
+        return
+    release_all_inputs(close_context_menu=False)
+    try:
+        user32 = ctypes.windll.user32
+        user32.PostMessageW(user32.GetForegroundWindow(), 0x001F, 0, 0)  # WM_CANCELMODE
+    except Exception:
+        pass
+    pyautogui.press("esc")
 
 
 def request_exit():
@@ -1561,10 +1741,10 @@ def on_press(key):
     try:
         if key == keyboard.Key.f12:
             print("[HOTKEY] F12 -> salir")
-            request_exit()
+            confirm_control("exit")
 
         elif key == keyboard.Key.f11:
-            toggle_pause()
+            confirm_control("pause")
 
         elif key == keyboard.Key.f8:
             release_all_inputs(close_context_menu=True)
@@ -1615,12 +1795,8 @@ def on_press(key):
             try:
                 if key.char and key.char.lower() == "r":
                     reset_tracking()
-                elif key.char and key.char.lower() == "m":
-                    toggle_camera_window()
                 elif key.char and key.char.lower() == "k":
                     reset_wink_calibration()
-                elif key.char and key.char.lower() == "b":
-                    toggle_floating_actions()
             except Exception:
                 pass
 
@@ -1645,11 +1821,13 @@ def update_optical_tracking(gray, now):
                 smooth_y = (1 - POINT_SMOOTH_ALPHA) * smooth_y + POINT_SMOOTH_ALPHA * float(new_y)
             dx_cam = smooth_x - float(old_x)
             dy_cam = smooth_y - float(old_y)
-            if abs(dx_cam) < DEADZONE_PX_CAMERA:
-                dx_cam = 0.0
-            if abs(dy_cam) < DEADZONE_PX_CAMERA:
-                dy_cam = 0.0
             precision_scale = precision_scale_from_camera_delta(dx_cam, dy_cam)
+            # Subtract the noise floor smoothly instead of jumping at its edge.
+            magnitude = math.hypot(dx_cam,dy_cam)
+            noise_scale = max(0.0,1.0-DEADZONE_PX_CAMERA/magnitude) if magnitude else 0.0
+            noise_scale *= noise_scale
+            dx_cam *= noise_scale
+            dy_cam *= noise_scale
             dx_mouse = dx_cam * REL_GAIN_X * precision_scale
             dy_mouse = dy_cam * REL_GAIN_Y * precision_scale
             dist = math.hypot(dx_mouse, dy_mouse)
@@ -1660,9 +1838,10 @@ def update_optical_tracking(gray, now):
             if now >= suspend_move_until:
                 if dx_mouse != 0.0 or dy_mouse != 0.0:
                     cur_x, cur_y = pyautogui.position()
-                    tx = int(clamp_with_margin(cur_x + dx_mouse, 0, SCREEN_W - 1))
-                    ty = int(clamp_with_margin(cur_y + dy_mouse, 0, SCREEN_H - 1))
-                    pyautogui.moveTo(tx, ty)
+                    tx = round(clamp_with_margin(cur_x + dx_mouse, 0, SCREEN_W - 1))
+                    ty = round(clamp_with_margin(cur_y + dy_mouse, 0, SCREEN_H - 1))
+                    if (tx,ty) != (cur_x,cur_y):
+                        pyautogui.moveTo(tx, ty)
                     now_pos = pyautogui.position()
                     dt = max(1e-06, time.time() - prev_speed_time)
                     cursor_speed = math.hypot(now_pos[0] - prev_cursor_pos[0], now_pos[1] - prev_cursor_pos[1]) / dt
@@ -1736,6 +1915,7 @@ def apply_runtime_settings(values):
 
 
 def save_runtime_settings(values):
+    global ACTIVE_PROFILE
     if os.path.exists(PROFILES_FILE):
         with open(PROFILES_FILE, encoding="utf-8") as f:
             profiles = json.load(f)
@@ -1750,13 +1930,51 @@ def save_runtime_settings(values):
     profile["sens_y"] = SENS_LEVELS[CURRENT_SENS_Y_INDEX]
     profile["sensitivity"] = profile["sens_x"]
     profile["tracking_mode"] = "Punto facial"
-    profiles[ACTIVE_PROFILE] = profile
+    new_name = profile_save_name({k:normalize_profile(v) for k,v in profiles.items()}, ACTIVE_PROFILE, profile)
+    if new_name != ACTIVE_PROFILE:
+        profiles = {k:{**v,"startup_default":False} for k,v in profiles.items()}
+        profile["startup_default"] = True
+    profiles[new_name] = profile
     save_profiles(profiles)
+    ACTIVE_PROFILE = new_name
     CONFIG.update(profile)
+    CONFIG["_profile_name"] = new_name
+
+
+main_menu_window = None
+
+
+def apply_menu_profile(config):
+    global ACTIVE_PROFILE, CONFIG, drag_mode, office_mode
+    stop_drag()
+    drag_mode = office_mode = False
+    update_mode_buttons()
+    CONFIG = dict(config)
+    ACTIVE_PROFILE = config["_profile_name"]
+    GESTURE_ACTIONS.update({key:config.get(key,"Nada") for key in GESTURE_ACTIONS})
+    apply_runtime_settings(config)
+    reset_wink_calibration()
+
+
+def open_main_menu():
+    global main_menu_window
+    if main_menu_window is not None and main_menu_window.winfo_exists():
+        main_menu_window.deiconify()
+        main_menu_window.lift()
+        return
+    if live_settings_window is not None and live_settings_window.winfo_exists():
+        live_settings_window.lift()
+        live_settings_window.message.configure(text="Guardá o cerrá estos ajustes antes de abrir Menú principal.")
+        return
+    main_menu_window = show_gui_menu(floating_keyboard_root, apply_menu_profile)
 
 
 def open_live_settings():
     global live_settings_window
+    if main_menu_window is not None and main_menu_window.winfo_exists():
+        main_menu_window.deiconify()
+        main_menu_window.lift()
+        return
     if live_settings_window is not None and live_settings_window.winfo_exists():
         live_settings_window.lift()
         return
@@ -1852,6 +2070,7 @@ try:
         rgb.flags.writeable = False
         res = face_mesh.process(rgb)  # Raw camera data, never overlays or text.
         if not res.multi_face_landmarks:
+            brow_detector = None
             if not SELECTING_POINT:
                 stop_drag()
                 reset_tracking()
@@ -1876,9 +2095,9 @@ try:
         ratio_raw = mouth_open_ratio(lm)
         gesture = detect_gesture(lm, ratio_raw, now)
         if gesture is not None and not selecting and not SELECTING_POINT:
-            execute_action(GESTURE_ACTIONS.get(gesture, "Nada"))
+            execute_gesture(gesture)
 
-        if DWELL_ENABLED and not SELECTING_POINT:
+        if DWELL_ENABLED and not SELECTING_POINT and (not drag_mode or pointer_over_controls()) and not (floating_actions_root is not None and floating_actions_root.moving):
             current_cursor_pos = pyautogui.position()
             moved_px = math.hypot(current_cursor_pos[0]-last_cursor_pos[0],
                                   current_cursor_pos[1]-last_cursor_pos[1])
@@ -1946,5 +2165,11 @@ finally:
     try:
         if floating_keyboard_root is not None:
             floating_keyboard_root.destroy()
+    except Exception:
+        pass
+
+    # Close any remaining context menu after our windows have been removed.
+    try:
+        pyautogui.press("esc")
     except Exception:
         pass

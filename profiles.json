@@ -11,16 +11,17 @@
         "zoom": false,
         "dwell_time": 2.0,
         "wink_diff_sens": "estricto",
-        "tracking_mode": "Punto manual"
+        "tracking_mode": "Punto manual",
+        "startup_default": false
     },
-    "Octavio": {
+    "Por Defecto": {
         "mouth": "Drag toggle",
         "wink_left": "Click izquierdo",
         "wink_right": "Click derecho",
         "camera": 1,
-        "sens_x": "media",
-        "sens_y": "baja",
-        "sensitivity": "media",
+        "sens_x": "alta",
+        "sens_y": "alta",
+        "sensitivity": "alta",
         "stabilize": true,
         "zoom": false,
         "dwell_time": 1.5,
@@ -29,12 +30,13 @@
         "face_point": "Punta de nariz",
         "sound_enabled": true,
         "dwell_enabled": false,
-        "gain_x": 62.0,
-        "gain_y": 36.0,
+        "gain_x": 74.0,
+        "gain_y": 64.0,
         "mouth_threshold": 0.055,
         "dwell_radius": 20.0,
         "deadzone": 0.15,
-        "smoothing": 0.65
+        "smoothing": 0.65,
+        "startup_default": false
     },
     "Edu": {
         "mouth": "Doble click",
@@ -48,6 +50,33 @@
         "zoom": false,
         "dwell_time": 1.5,
         "wink_diff_sens": "muy estricto",
-        "tracking_mode": "Punto manual"
+        "tracking_mode": "Punto manual",
+        "startup_default": false
+    },
+    "Personalizado 1": {
+        "mouth": "Drag toggle",
+        "wink_left": "Click izquierdo",
+        "wink_right": "Click derecho",
+        "brow_raise": "Click izquierdo",
+        "brow_frown": "Click derecho",
+        "camera": 1,
+        "sens_x": "alta",
+        "sens_y": "alta",
+        "sensitivity": "alta",
+        "stabilize": true,
+        "zoom": false,
+        "dwell_time": 1.5,
+        "wink_diff_sens": "muy estricto",
+        "tracking_mode": "Punto facial",
+        "face_point": "Punta de nariz",
+        "sound_enabled": true,
+        "dwell_enabled": false,
+        "gain_x": 74.0,
+        "gain_y": 64.0,
+        "mouth_threshold": 0.055,
+        "dwell_radius": 20.0,
+        "deadzone": 0.15,
+        "smoothing": 0.65,
+        "startup_default": true
     }
 }

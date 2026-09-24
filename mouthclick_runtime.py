@@ -21,6 +21,19 @@ RANGES = {
 WINK_LEVELS = ["muy sensible", "sensible", "normal", "estricto", "muy estricto"]
 
 
+def profile_save_name(profiles, name, candidate):
+    if name != "Por Defecto" or name not in profiles:
+        return name
+    def comparable(p):
+        return {k:v for k,v in validated(p).items() if not k.startswith("_") and k != "startup_default"}
+    if comparable(profiles[name]) == comparable(candidate):
+        return name
+    index = 1
+    while f"Personalizado {index}" in profiles:
+        index += 1
+    return f"Personalizado {index}"
+
+
 def gain_index(value, levels):
     return max((i for i, level in enumerate(levels) if level <= value), default=0)
 
@@ -69,6 +82,42 @@ def atomic_save_profiles(path, profiles):
     finally:
         if temporary and os.path.exists(temporary):
             os.unlink(temporary)
+
+
+class BrowGestures:
+    """Neutral calibration and one event per sustained expression; heuristic detector."""
+    def __init__(self):
+        self.samples = []
+        self.baseline = None
+        self.candidate = None
+        self.since = 0.0
+        self.latched = False
+
+    def update(self, height, gap, now, allowed=True):
+        if not all(math.isfinite(x) and x > 0 for x in (height, gap)):
+            return None
+        if self.baseline is None:
+            if allowed:
+                self.samples.append((height, gap))
+                if len(self.samples) >= 45:
+                    self.baseline = tuple(sorted(s[i] for s in self.samples)[len(self.samples)//2] for i in (0,1))
+                    self.samples.clear()
+            return None
+        h, g = height/self.baseline[0], gap/self.baseline[1]
+        neutral = .90 < h < 1.12 and .92 < g < 1.08
+        if neutral:
+            self.latched = False
+        expression = "brow_raise" if h > 1.28 else "brow_frown" if g < .85 and h < .95 else None
+        if not allowed or self.latched or expression is None:
+            self.candidate = None
+            return None
+        if expression != self.candidate:
+            self.candidate, self.since = expression, now
+        elif now-self.since >= .35:
+            self.latched = True
+            self.candidate = None
+            return expression
+        return None
 
 
 class SettingsSession:

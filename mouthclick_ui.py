@@ -119,6 +119,15 @@ def toggle(parent, title, variable):
                             highlightcolor=COLORS["red"], highlightbackground=COLORS["card"],
                             highlightthickness=2, bd=0, pady=10, padx=4, takefocus=True)
     control.pack(fill="x")
+    control.configure(cursor="hand2")
+    # One toggle on release anywhere in the row, including the caption.
+    control.bind("<ButtonPress-1>", lambda e: "break")
+    def activate(event):
+        if 0 <= event.x < control.winfo_width() and 0 <= event.y < control.winfo_height():
+            control.invoke()
+        return "break"
+    control.bind("<ButtonRelease-1>", activate)
+    row.bind("<ButtonRelease-1>", lambda e: control.invoke())
     control.bind("<Configure>", lambda e: control.configure(wraplength=max(100, e.width-45)))
     return control
 
@@ -196,14 +205,14 @@ class Menu:
             total = max(1, self.content.winfo_height())
             self.canvas.yview_moveto(max(0, y-24)/total)
 
-    def finish(self, start, shortcuts):
+    def finish(self, start, shortcuts, editing=False):
         help_card = self.card("Durante el uso")
         hint(help_card, shortcuts)
         hint(help_card, "Tab: siguiente control · Mayús + Tab: anterior · Espacio: activar opción")
-        tk.Label(self.footer, text="●  CONFIGURACIÓN · Control sin iniciar",
+        tk.Label(self.footer, text="●  CONFIGURACIÓN · Control en curso" if editing else "●  CONFIGURACIÓN · Control sin iniciar",
                  bg="#30271A", fg=COLORS["amber"], font=(FONT, 10),
                  padx=12, pady=5).pack(anchor="w", pady=(0,8))
-        button(self.footer, "Comenzar control  →", start, primary=True).pack(fill="x")
+        button(self.footer, "Guardar y aplicar  →" if editing else "Comenzar control  →", start, primary=True).pack(fill="x")
         self.window.update_idletasks()
         self._layout(type("Size", (), {"width": self.canvas.winfo_width()})())
         # Native caption keeps Windows move/resize, keyboard and system-menu behavior.
@@ -214,6 +223,87 @@ class Menu:
             ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(enabled), ctypes.sizeof(enabled))
         except (AttributeError, OSError):
             pass
+
+
+def compact_card(card):
+    """Reduce spacing, keeping font sizes and full-width click targets."""
+    def visit(parent):
+        for widget in parent.winfo_children():
+            if widget.winfo_manager() == "pack":
+                widget.pack_configure(pady=2)
+                if isinstance(widget, (tk.Entry, ttk.Spinbox)):
+                    widget.pack_configure(ipady=2)
+            if isinstance(widget, tk.Checkbutton):
+                widget.configure(pady=4)
+            visit(widget)
+    visit(card.body)
+
+
+class PagedMenu:
+    """Main configuration in paired cards, with no scrolling container."""
+    def __init__(self, window):
+        self.window = window
+        apply_theme(window)
+        window.title("MouthClick · Menú principal")
+        scale = float(window.tk.call("tk", "scaling"))/1.3333
+        window.geometry("1080x820")
+        window.minsize(min(round(1000*scale),window.winfo_screenwidth()),
+                       min(round(730*scale),window.winfo_screenheight()))
+        header = tk.Frame(window,bg=COLORS["panel"],padx=22,pady=10)
+        header.pack(fill="x")
+        label(header,"Menú principal",size=22,bold=True).pack(anchor="w")
+        label(header,"Perfil, gestos y movimiento · Teletón Labs",size=10,secondary=True).pack(anchor="w")
+        self.footer = tk.Frame(window,bg=COLORS["panel"],padx=18,pady=10)
+        self.footer.pack(side="bottom",fill="x")
+        nav=tk.Frame(window,bg=COLORS["bg"],padx=18,pady=8)
+        nav.pack(side="bottom",fill="x")
+        self.previous=button(nav,"← Anterior",lambda:self.show_page(self.index-1))
+        self.previous.pack(side="left")
+        self.next=button(nav,"Siguiente →",lambda:self.show_page(self.index+1))
+        self.next.pack(side="right")
+        self.counter=label(nav,"",secondary=True)
+        self.counter.pack(expand=True)
+        self.content=tk.Frame(window,bg=COLORS["bg"])
+        self.content.pack(fill="both",expand=True,padx=18,pady=8)
+        self.pages=[]
+        self.cards=[]
+        self.index=0
+        window.bind("<Alt-Left>",lambda e:self.show_page(self.index-1))
+        window.bind("<Alt-Right>",lambda e:self.show_page(self.index+1))
+        window.paged_menu=self
+
+    def card(self,title):
+        number=len(self.cards)
+        if number%4==0:
+            page=tk.Frame(self.content,bg=COLORS["bg"])
+            page.columnconfigure((0,1),weight=1,uniform="cards")
+            page.rowconfigure((0,1),weight=1,uniform="rows")
+            self.pages.append(page)
+        card=Card(self.pages[-1],title,f"{number+1:02}")
+        card.grid(row=(number%4)//2,column=number%2,sticky="nsew",padx=(0,8) if number%2==0 else (8,0),pady=5)
+        self.cards.append(card)
+        return card.body
+
+    def show_page(self,index):
+        if not 0<=index<len(self.pages):
+            return
+        for page in self.pages:
+            page.pack_forget()
+        self.index=index
+        self.pages[index].pack(fill="both",expand=True)
+        self.counter.configure(text=f"{index+1} / {len(self.pages)}")
+        self.previous.configure(state="normal" if index else "disabled")
+        self.next.configure(state="normal" if index<len(self.pages)-1 else "disabled")
+        (self.next if index<len(self.pages)-1 else self.previous).focus_set()
+
+    def finish(self,start,shortcuts,editing=False):
+        help_body=self.card("Atajos y ayuda")
+        hint(help_body,shortcuts)
+        hint(help_body,"Alt + flecha izquierda/derecha: cambiar de página")
+        button(self.footer,"Guardar y aplicar →" if editing else "Comenzar control →",start,primary=True).pack(fill="x")
+        for card in self.cards:
+            compact_card(card)
+        self.show_page(0)
 
 
 def style_floating(root):
@@ -288,6 +378,7 @@ class ActionsBubble(tk.Toplevel):
                   "Drag":"Arrastrar", "Teclado":"Teclado", "Calib":"Calibrar guiño", "Centro":"Centrar cursor", "Pausa":"Pausar", "Salir":"Salir de la app"}
         self.action_buttons = []
         self.pause_button = None
+        self.mode_buttons = {}
         for i, (title, command) in enumerate(items):
             b = button(grid, titles.get(title,title), command, primary=(title == "Sensibilidades"))
             b.configure(padx=4, pady=7, font=(FONT,10,"bold"))
@@ -296,17 +387,23 @@ class ActionsBubble(tk.Toplevel):
             self.action_buttons.append(b)
             if title == "Pausa":
                 self.pause_button = b
+            if title in ("Drag", "Oficina"):
+                self.mode_buttons[title] = b
         close = button(grid, "Contraer  ↑", self.collapse_now)
         close.configure(padx=4, pady=7, font=(FONT,10,"bold"))
         close.grid(row=len(items)//2,column=len(items)%2,sticky="nsew",padx=3,pady=4)
         grid.rowconfigure(len(items)//2, weight=1)
-        hint(self.panel, "Arrastrá el encabezado para mover")
+        hint(self.panel, "Clic en encabezado: mover · otro clic: fijar")
+        self.moving = False
+        self.move_after = None
+        self.header = header
         self.bind("<Enter>", lambda e: self.cancel(), add="+")
         self.bind("<Leave>", self._leave, add="+")
         self.pill.bind("<Enter>", lambda e: self.expand(), add="+")
         for target in (self.pill, header, *header.winfo_children()):
             target.bind("<ButtonPress-1>", self._drag_start, add="+")
             target.bind("<B1-Motion>", self._drag, add="+")
+            target.bind("<ButtonRelease-1>", self._drag_end, add="+")
         self.collapse_now()
         self.deiconify()
 
@@ -337,6 +434,8 @@ class ActionsBubble(tk.Toplevel):
         self.panel.place(x=self.px(16),y=self.px(16),width=self.px(308),height=self.px(self.panel_height-32))
 
     def collapse_now(self):
+        if getattr(self, "moving", False):
+            return
         self.cancel()
         self.expanded=False
         self.panel.place_forget()
@@ -344,19 +443,54 @@ class ActionsBubble(tk.Toplevel):
         self.pill.place(x=self.px(12),y=self.px(8),width=self.px(134),height=self.px(46))
 
     def _leave(self, event):
+        if self.moving:
+            return
         x,y=self.winfo_pointerxy()
         if not (self.winfo_rootx() <= x < self.winfo_rootx()+self.winfo_width()
                 and self.winfo_rooty() <= y < self.winfo_rooty()+self.winfo_height()):
             self.schedule()
 
     def _drag_start(self,event):
+        self.was_moving = self.moving
+        self.physical_drag = False
+        self.press_position = (event.x_root,event.y_root)
         self.drag_offset=(event.x_root-self.winfo_x(),event.y_root-self.winfo_y())
 
     def _drag(self,event):
+        if abs(event.x_root-self.press_position[0])+abs(event.y_root-self.press_position[1]) < 5:
+            return
+        self.physical_drag = True
         self.cancel()
         dx,dy=self.drag_offset
         self.position=(event.x_root-dx,event.y_root-dy)
         self._geometry(340 if self.expanded else 158,self.panel_height if self.expanded else 62)
+
+    def _drag_end(self, event):
+        if self.was_moving or self.physical_drag:
+            self.stop_moving()
+        else:
+            self.moving = True
+            self._follow_pointer()
+
+    def _follow_pointer(self):
+        if not self.moving:
+            return
+        self.cancel()
+        x,y = self.winfo_pointerxy()
+        dx,dy = self.drag_offset
+        self.position = (x-dx,y-dy)
+        self._geometry(340 if self.expanded else 158,self.panel_height if self.expanded else 62)
+        self.move_after = self.after(30,self._follow_pointer)
+
+    def stop_moving(self):
+        self.moving = False
+        if self.move_after is not None:
+            self.after_cancel(self.move_after)
+            self.move_after = None
+
+    def destroy(self):
+        self.stop_moving()
+        super().destroy()
 
     def set_status(self, text):
         if self.status.cget("text") != text:
@@ -367,3 +501,14 @@ class ActionsBubble(tk.Toplevel):
             self.pause_button.configure(text="Continuar" if paused else "Pausar")
         if paused:
             self.set_status("PAUSADO · Elegí Continuar")
+
+    def set_modes(self, drag, office):
+        for key, active, title in (("Drag", drag, "Arrastre"), ("Oficina", office, "Oficina")):
+            if key in self.mode_buttons:
+                b = self.mode_buttons[key]
+                bg = COLORS["red"] if active else COLORS["input"]
+                hover = COLORS["hover"] if active else COLORS["border"]
+                b.configure(text=f"{title} {'ON · salir' if active else 'OFF'}",
+                            bg=bg, activebackground=hover, highlightbackground=bg)
+                b.bind("<Enter>", lambda e,w=b,c=hover:w.configure(bg=c))
+                b.bind("<Leave>", lambda e,w=b,c=bg:w.configure(bg=c))

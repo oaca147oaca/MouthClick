@@ -11,9 +11,9 @@ from tkinter import ttk
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from mouthclick_ui import Menu, field, hint, toggle, style_floating
-from mouthclick_live_ui import numeric
-from mouthclick_runtime import FACE_POINTS, RANGES, validated
+from mouthclick_ui import PagedMenu, Menu, field, hint, toggle, style_floating
+from mouthclick_live_ui import numeric, WindowChrome
+from mouthclick_runtime import FACE_POINTS, RANGES, validated, profile_save_name
 from tkinter import messagebox
 import math
 
@@ -40,7 +40,7 @@ def namespace(source):
             keep.append(n)
     saved = []
     env = dict(numeric=numeric, FACE_POINTS=FACE_POINTS, RANGES=RANGES, validated=validated, math=math, messagebox=messagebox, tk=tk, ttk=ttk, Menu=Menu, field=field, hint=hint, toggle=toggle,
-               style_floating=style_floating,
+               style_floating=style_floating, PagedMenu=PagedMenu, WindowChrome=WindowChrome, profile_save_name=profile_save_name,
                load_profiles=lambda: copy.deepcopy(PROFILES),
                save_profiles=lambda p: saved.append(copy.deepcopy(p)),
                get_camera_options=lambda: (['Camera A', 'Camera B'], {'Camera A': 0, 'Camera B': 1}))
@@ -62,8 +62,8 @@ def run(source, name, select=False, size=None, scale=None, capture=False):
         root.update()
         controls = list(widgets(root))
         if select and name != 'cameramause.py':
-            combo = next(w for w in controls if isinstance(w, ttk.Combobox) and 'Octavio' in w.cget('values'))
-            combo.set('Octavio')
+            combo = next(w for w in controls if isinstance(w, ttk.Combobox) and 'Por Defecto' in w.cget('values'))
+            combo.set('Por Defecto')
             combo.event_generate('<<ComboboxSelected>>')
             root.update()
         if size:
@@ -71,17 +71,19 @@ def run(source, name, select=False, size=None, scale=None, capture=False):
             begin = next(w for w in buttons if 'Comenzar' in w.cget('text'))
             assert begin.winfo_rooty() + begin.winfo_height() <= root.winfo_rooty()+root.winfo_height(), 'Start clipped'
             assert begin.winfo_height() >= 40, 'Start target too small'
-            for w in controls:
-                if isinstance(w, ttk.Combobox):
-                    assert w.winfo_width() >= 160, ('Field clipped', w.winfo_width())
-                    w.focus_force()
+            if hasattr(root, 'paged_menu'):
+                menu=root.paged_menu
+                assert not any(isinstance(w,ttk.Scrollbar) for w in controls)
+                for index in range(len(menu.pages)):
+                    menu.show_page(index)
                     root.update()
-                    canvas = next(x for x in controls if isinstance(x, tk.Canvas) and x.master.master == root)
-                    assert w.winfo_rooty() >= canvas.winfo_rooty()-1, 'Focus not scrolled into view'
+                    for card in menu.cards[index*2:index*2+2]:
+                        for control in card.body.winfo_children():
+                            assert control.winfo_rooty()+control.winfo_height()<=menu.content.winfo_rooty()+menu.content.winfo_height(), (size,scale,index,control)
+                menu.show_page(0)
+                root.update()
             if capture:
                 from PIL import ImageGrab
-                canvas.yview_moveto(0)
-                root.update()
                 x, y = root.winfo_rootx(), root.winfo_rooty()
                 ImageGrab.grab(bbox=(x,y,x+root.winfo_width(),y+root.winfo_height())).save('.visual-build/preview.png')
         start = next(w for w in widgets(root) if isinstance(w, tk.Button) and ('COMENZAR' in w.cget('text') or 'Comenzar' in w.cget('text')))
