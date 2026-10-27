@@ -89,6 +89,7 @@ class LiveSettings(tk.Toplevel):
         hint(deadzone, "Ignora movimientos menores a este valor para reducir temblores del cursor.")
         gestures = self.add_page("Gestos")
         field(gestures, "Sensibilidad del guiño", self.vars["wink_diff_sens"], WINK_LEVELS)
+        hint(gestures, "Más sensible: alcanza un cierre menor. Más estricto: exige cerrar más el ojo. Muy estricto es el punto medio de la escala.")
         numeric(gestures, "Umbral de boca · menor = más sensible", self.vars["mouth_threshold"], "mouth_threshold")
         audio = self.add_page("Sonido")
         toggle(audio, "Sonido de las acciones", self.vars["sound_enabled"])

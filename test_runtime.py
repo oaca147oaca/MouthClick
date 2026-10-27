@@ -20,7 +20,8 @@ import cv2
 import numpy as np
 from mouthclick_runtime import (ActionAudio, FACE_POINTS, RANGES, SettingsSession,
                                atomic_save_profiles, point_pixels, validated, wave_bytes, gain_index, step_gain)
-from mouthclick_runtime import BrowGestures, profile_save_name
+from mouthclick_runtime import BrowGestures, profile_save_name, LatestFrameCapture
+from mouthclick_alignment import alignment_state
 
 SOURCE = Path(__file__).with_name("mouthclick_mvp_opticalflow.py").read_text(encoding="utf-8")
 TREE = ast.parse(SOURCE)
@@ -51,6 +52,74 @@ def isolated_app():
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_extended_wink_scale_preserves_existing_profiles(self):
+        from mouthclick_runtime import WINK_LEVELS
+        app = self.app
+        self.assertEqual(WINK_LEVELS, app["WINK_DIFF_LEVELS"])
+        self.assertEqual(WINK_LEVELS[len(WINK_LEVELS)//2], "muy estricto")
+        legacy = [.78, .72, .66, .60, .54]
+        self.assertEqual([app["WINK_CLOSED_RATIO_BY_LEVEL"][level] for level in WINK_LEVELS[:5]], legacy)
+        ratios = [app["WINK_CLOSED_RATIO_BY_LEVEL"][level] for level in WINK_LEVELS]
+        self.assertTrue(all(a > b for a, b in zip(ratios, ratios[1:])))
+        for level in WINK_LEVELS:
+            settings = validated(app["normalize_profile"]({"wink_diff_sens": level}))
+            app["apply_runtime_settings"](settings)
+            self.assertEqual(app["runtime_snapshot"]()["wink_diff_sens"], level)
+            self.assertEqual(app["WINK_CLOSED_RATIO_THR"], app["WINK_CLOSED_RATIO_BY_LEVEL"][level])
+
+    def test_camera_switch_transaction(self):
+        for outcome in ("success", "open_failure", "no_frames", "save_failure", "unchanged"):
+            with self.subTest(outcome=outcome):
+                app = isolated_app()
+                old, raw, candidate = Mock(), Mock(), Mock()
+                candidate.read.return_value = (outcome != "no_frames", np.ones((2, 2)))
+                clock = Mock()
+                clock.monotonic.side_effect = [0, 0, 5]
+                app.update(cap=old, CAMERA_INDEX=0, LatestFrameCapture=Mock(return_value=candidate),
+                           open_camera=Mock(return_value=None if outcome == "open_failure" else raw),
+                           save_profiles=Mock(side_effect=OSError("disk") if outcome == "save_failure" else None),
+                           stop_drag=Mock(), reset_tracking=Mock(), reset_wink_calibration=Mock(), time=clock)
+                config = {"camera": 0 if outcome == "unchanged" else 1}
+                if outcome in ("open_failure", "no_frames", "save_failure"):
+                    with self.assertRaises((ValueError, OSError)):
+                        app["save_menu_profiles"]({"Test": config}, config)
+                    self.assertIs(app["cap"], old)
+                    self.assertEqual(app["CAMERA_INDEX"], 0)
+                    old.release.assert_not_called()
+                    if outcome != "open_failure": candidate.release.assert_called_once()
+                    if outcome != "save_failure": app["save_profiles"].assert_not_called()
+                else:
+                    app["save_menu_profiles"]({"Test": config}, config)
+                    app["save_profiles"].assert_called_once()
+                    if outcome == "success":
+                        self.assertIs(app["cap"], candidate)
+                        self.assertEqual(app["CAMERA_INDEX"], 1)
+                        old.release.assert_called_once()
+                        app["reset_tracking"].assert_called_once()
+                    else:
+                        app["open_camera"].assert_not_called()
+                        old.release.assert_not_called()
+
+    def test_alignment_requires_face_center_size_and_visible_eyes(self):
+        self.assertFalse(alignment_state(None)[0])
+        points=[SimpleNamespace(x=.5,y=.5) for _ in range(478)]
+        for index,x,y in [(10,.5,.2),(152,.5,.8),(234,.3,.5),(454,.7,.5),
+                          (33,.35,.4),(133,.45,.4),(160,.38,.38),(158,.42,.38),(153,.42,.42),(144,.38,.42),
+                          (362,.55,.4),(263,.65,.4),(385,.58,.38),(387,.62,.38),(373,.62,.42),(380,.58,.42)]:
+            points[index]=SimpleNamespace(x=x,y=y)
+        self.assertTrue(alignment_state(points)[0])
+        # A smaller face at a comfortable distance remains acceptable.
+        comfortable = [SimpleNamespace(x=.5+(p.x-.5)*.5, y=.57+(p.y-.5)*.5) for p in points]
+        self.assertTrue(alignment_state(comfortable)[0])
+        distant = [SimpleNamespace(x=.5+(p.x-.5)*.3, y=.5+(p.y-.5)*.3) for p in points]
+        self.assertFalse(alignment_state(distant)[0])
+        close = [SimpleNamespace(x=.5+(p.x-.5)*1.2, y=.5+(p.y-.5)*1.2) for p in points]
+        self.assertFalse(alignment_state(close)[0])
+        for p in points:p.x+=.2
+        self.assertFalse(alignment_state(points)[0])
+        for p in points:p.x-=.2
+        for index in (160,158,153,144):points[index].y=.4
+        self.assertFalse(alignment_state(points)[0])
     def test_tiny_alternating_camera_noise_does_not_move_cursor(self):
         app = self.app
         app["current_gray_frame"] = np.zeros((480,640),np.uint8)
@@ -103,13 +172,15 @@ class RuntimeTests(unittest.TestCase):
 
     def test_startup_prefers_saved_profile_and_allows_config(self):
         app = self.app
-        app["load_profiles"] = Mock(return_value={"Octavio": {}, "Otro": {"startup_default": True}})
+        app["load_profiles"] = Mock(return_value={"Octavio": {}, "Otro": {"startup_default": True,"setup_complete":True}})
         app["show_gui_menu"] = Mock(return_value={"menu": True})
         app["sys"] = SimpleNamespace(argv=["app"])
         self.assertEqual(app["startup_config"]()["_profile_name"], "Otro")
-        app["load_profiles"].return_value = {"Octavio": {}}
+        app["load_profiles"].return_value = {"Octavio": {"setup_complete":True}}
         self.assertEqual(app["startup_config"]()["_profile_name"], "Octavio")
         app["sys"].argv.append("--config")
+        self.assertEqual(app["startup_config"](), {"menu": True})
+        app["load_profiles"].return_value = {"Por Defecto": {"startup_default":True}}
         self.assertEqual(app["startup_config"](), {"menu": True})
         app["sys"].argv = ["app"]
         app["load_profiles"].return_value = {"Default": {}}
@@ -275,10 +346,47 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(app["RUNNING"])
 
     def test_hotkeys_leave_time_for_ui(self):
-        for _ in range(200):
+        for _ in range(64):
             self.app["ui_commands"].put("unused")
         self.app["process_hotkeys"](limit=5)
-        self.assertEqual(self.app["ui_commands"].qsize(), 195)
+        self.assertEqual(self.app["ui_commands"].qsize(), 59)
+
+    def test_hotkey_queue_is_bounded_and_ignores_typing(self):
+        app=self.app
+        for _ in range(1000):
+            app["queue_hotkey"](SimpleNamespace(char="a"))
+        self.assertTrue(app["ui_commands"].empty())
+        for _ in range(1000):
+            app["queue_hotkey"]("f1")
+        self.assertEqual(app["ui_commands"].qsize(),64)
+        app["queue_hotkey"]("f12")
+        keys=[app["ui_commands"].get_nowait() for _ in range(64)]
+        self.assertEqual(keys[-1],"f12")
+
+    def test_capture_keeps_latest_frame_and_stops(self):
+        class Camera:
+            count=0
+            released=False
+            def read(self):
+                time.sleep(.002)
+                self.count+=1
+                return True,self.count
+            def release(self):
+                self.released=True
+        camera=Camera()
+        capture=LatestFrameCapture(camera)
+        try:
+            ok,first=capture.read()
+            self.assertTrue(ok)
+            time.sleep(.04)
+            ok,last=capture.read()
+            self.assertGreater(last,first+1)
+            self.assertLessEqual(camera.count-last,1)
+        finally:
+            capture.release()
+        self.assertTrue(camera.released)
+        self.assertFalse(capture.worker.is_alive())
+        self.assertIsNone(capture.latest)
 
     def test_pause_resume_and_exit(self):
         app = self.app

@@ -3,16 +3,28 @@
         "mouth": "Drag toggle",
         "wink_left": "Click izquierdo",
         "wink_right": "Click derecho",
+        "brow_raise": "Nada",
+        "brow_frown": "Nada",
         "camera": 0,
-        "sens_x": "media",
-        "sens_y": "media",
-        "sensitivity": "media",
+        "sens_x": "baja",
+        "sens_y": "baja",
+        "sensitivity": "baja",
         "stabilize": false,
         "zoom": false,
-        "dwell_time": 2.0,
-        "wink_diff_sens": "estricto",
-        "tracking_mode": "Punto manual",
-        "startup_default": false
+        "dwell_time": 1.5,
+        "wink_diff_sens": "muy estricto",
+        "tracking_mode": "Punto facial",
+        "face_point": "Punta de nariz",
+        "sound_enabled": true,
+        "dwell_enabled": true,
+        "startup_default": true,
+        "gain_x": 42.0,
+        "gain_y": 36.0,
+        "mouth_threshold": 0.055,
+        "dwell_radius": 20.0,
+        "deadzone": 0.15,
+        "smoothing": 0.65,
+        "setup_complete": true
     },
     "Por Defecto": {
         "mouth": "Drag toggle",
@@ -77,6 +89,6 @@
         "dwell_radius": 20.0,
         "deadzone": 0.15,
         "smoothing": 0.65,
-        "startup_default": true
+        "startup_default": false
     }
 }

@@ -18,7 +18,8 @@ RANGES = {
     "dwell_time": (0.5, 5.0, 2.0), "dwell_radius": (3.0, 60.0, 20.0),
     "deadzone": (0.0, 2.0, 0.15), "smoothing": (0.1, 1.0, 0.65),
 }
-WINK_LEVELS = ["muy sensible", "sensible", "normal", "estricto", "muy estricto"]
+WINK_LEVELS = ["muy sensible", "sensible", "normal", "estricto", "muy estricto",
+               "extra estricto", "ultra estricto", "estricto máximo", "estricto extremo"]
 
 
 def profile_save_name(profiles, name, candidate):
@@ -160,6 +161,50 @@ def wave_bytes(pattern):
         wav.setparams((1, 2, rate, 0, "NONE", "not compressed"))
         wav.writeframes(samples)
     return result.getvalue()
+
+
+class LatestFrameCapture:
+    """Drain the camera continuously; retain only its newest frame, never a backlog."""
+    def __init__(self, capture):
+        self.capture = capture
+        self.condition = threading.Condition()
+        self.stopped = threading.Event()
+        self.latest = None
+        self.sequence = 0
+        self.consumed = 0
+        self.worker = threading.Thread(target=self._run, name="MouthClick camera", daemon=True)
+        self.worker.start()
+
+    def _run(self):
+        while not self.stopped.is_set():
+            try:
+                ok, frame = self.capture.read()
+            except Exception:
+                ok, frame = False, None
+            with self.condition:
+                self.latest = frame if ok else None
+                self.sequence += 1
+                self.condition.notify_all()
+            if not ok:
+                self.stopped.wait(.03)
+
+    def read(self):
+        with self.condition:
+            self.condition.wait_for(lambda:self.sequence != self.consumed or self.stopped.is_set(), timeout=.15)
+            if self.sequence == self.consumed or self.stopped.is_set():
+                return False, None
+            self.consumed = self.sequence
+            frame = self.latest
+            return frame is not None, frame
+
+    def release(self):
+        self.stopped.set()
+        with self.condition:
+            self.condition.notify_all()
+        self.worker.join(timeout=1)
+        self.capture.release()
+        self.worker.join(timeout=1)
+        self.latest = None
 
 
 class ActionAudio:

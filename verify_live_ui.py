@@ -85,7 +85,7 @@ try:
         assert saved[-1]["gain_x"]==81.25 and saved[-1]["face_point"]=="Entrecejo"
         app["apply_runtime_settings"](before)
         saved.clear()
-        items=[(name,Mock()) for name in ["Click","Derecho","Drag","Oficina","Teclado","Sensibilidades","Menú principal","Calib","Centro","Pausa","Salir"]]
+        items=[(name,Mock()) for name in ["Drag","Oficina","Teclado","Sensibilidades","Menú principal","Posición cámara","Calib","Centro","Pausa","Salir"]]
         bubble=ActionsBubble(root,items,None,Mock(),Mock(),Mock())
         bubble.expand()
         bubble.set_status("ACTIVO · Punta de nariz")
@@ -152,7 +152,7 @@ try:
     from mouthclick_live_ui import WindowChrome, numeric
     app.update(tk=tk,ttk=ttk,messagebox=messagebox,PagedMenu=PagedMenu,Menu=Menu,field=field,hint=hint,toggle=toggle,WindowChrome=WindowChrome,numeric=numeric)
     app['load_profiles']=lambda:{'Test':app['normalize_profile']({})}
-    app['get_camera_options']=lambda:(['Camera test'],{'Camera test':0})
+    app['get_camera_options']=lambda:(['Camera test', 'Camera second'],{'Camera test':0, 'Camera second':1})
     app['save_profiles']=Mock()
     done=Mock()
     menu=app['show_gui_menu'](root,done)
@@ -162,15 +162,20 @@ try:
         for child in w.winfo_children():
             yield child
             yield from descendants(child)
+    camera = next(w for w in descendants(menu) if isinstance(w,ttk.Combobox) and tuple(w.cget('values')) == ('Camera test', 'Camera second'))
+    assert str(camera.cget('state')) == 'readonly'
+    camera.current(1)
     save=next(w for w in descendants(menu) if isinstance(w,tk.Button) and 'Guardar y aplicar' in w.cget('text'))
     save.invoke()
     done.assert_called_once()
+    assert done.call_args.args[0]['camera'] == 1
+    assert app['save_profiles'].call_args.args[0]['Test']['camera'] == 1
     assert root.winfo_exists() and not menu.winfo_exists()
     menu=app['show_gui_menu'](root,done)
     root.update()
     menu.destroy()
     done.assert_called_once()
     assert not errors,errors
-    print('PASS: four-card pages, named levels, fine values preserved, save/cancel, nine bubble actions at 100/125/150%')
+    print('PASS: settings, named levels, fine values, save/cancel and ten bubble actions at 100/125/150%')
 finally:
     root.destroy()

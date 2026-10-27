@@ -25,6 +25,8 @@ from mouthclick_runtime import FACE_POINTS, RANGES, validated, point_pixels, ato
 from mouthclick_live_ui import LiveSettings, numeric, ConfirmAction, WindowChrome
 from mouthclick_runtime import BrowGestures
 from mouthclick_runtime import profile_save_name
+from mouthclick_runtime import LatestFrameCapture
+from mouthclick_alignment import AlignmentGuide
 
 try:
     from pygrabber.dshow_graph import FilterGraph
@@ -60,13 +62,18 @@ LEGACY_SENS_MAP = {
     "media-alta": "alta",
 }
 
-WINK_DIFF_LEVELS = ["muy sensible", "sensible", "normal", "estricto", "muy estricto"]
+WINK_DIFF_LEVELS = ["muy sensible", "sensible", "normal", "estricto", "muy estricto",
+                    "extra estricto", "ultra estricto", "estricto máximo", "estricto extremo"]
 WINK_DIFF_THR_BY_LEVEL = {
     "muy sensible": 0.030,
     "sensible": 0.045,
     "normal": 0.060,
     "estricto": 0.080,
     "muy estricto": 0.105,
+    "extra estricto": 0.120,
+    "ultra estricto": 0.135,
+    "estricto máximo": 0.150,
+    "estricto extremo": 0.165,
 }
 WINK_CLOSED_RATIO_BY_LEVEL = {
     "muy sensible": 0.78,
@@ -74,6 +81,10 @@ WINK_CLOSED_RATIO_BY_LEVEL = {
     "normal": 0.66,
     "estricto": 0.60,
     "muy estricto": 0.54,
+    "extra estricto": 0.48,
+    "ultra estricto": 0.42,
+    "estricto máximo": 0.36,
+    "estricto extremo": 0.30,
 }
 
 # Ganancia por pixel de cámara. Ajustable con F3/F4 y F1/F2
@@ -189,7 +200,7 @@ def get_camera_options():
     return cam_names, cam_map
 
 
-def show_gui_menu(master=None, on_saved=None):
+def show_gui_menu(master=None, on_saved=None, persist_profiles=None):
     window = tk.Toplevel(master) if master is not None else tk.Tk()
     profiles = load_profiles()
     if not profiles:
@@ -223,9 +234,7 @@ def show_gui_menu(master=None, on_saved=None):
     hint(profile, "Tus ajustes se guardan al comenzar el control.")
     camera = ui.card("Cámara y seguimiento")
     camera_control = field(camera, "Cámara", cam_index_var, cam_names)
-    if master is not None:
-        camera_control.configure(state="disabled")
-        hint(camera, "Para cambiar la cámara, cerrá la sesión y abrí Configurar MouthClick.")
+    hint(camera, "Elegí la cámara y pulsá Guardar y aplicar para cambiarla.")
     field(camera, "Punto facial que mueve el cursor", tracking_mode_var, list(FACE_POINTS))
     hint(camera, "El punto se detecta automáticamente. La vista de cámara permanece oculta.")
     gestures = ui.card("Acciones por gesto")
@@ -295,7 +304,8 @@ def show_gui_menu(master=None, on_saved=None):
             "brow_raise": brow_raise_var.get(),
             "brow_frown": brow_frown_var.get(),
             "startup_default": True,
-            "camera": CAMERA_INDEX if master is not None else cam_map.get(cam_index_var.get(), 0),
+            "setup_complete": True,
+            "camera": cam_map[cam_index_var.get()],
             "sens_x": sens_x_var.get(),
             "sens_y": sens_y_var.get(),
             "sensitivity": sens_x_var.get(),  # compatibilidad
@@ -316,7 +326,10 @@ def show_gui_menu(master=None, on_saved=None):
             name = profile_save_name({k:normalize_profile(v) for k,v in profiles.items()}, name, p)
             updated = {key: {**value, "startup_default": False} for key,value in profiles.items()}
             updated[name] = p
-            save_profiles(updated)
+            if persist_profiles is None:
+                save_profiles(updated)
+            else:
+                persist_profiles(updated, p)
         except (ValueError, OSError) as exc:
             messagebox.showerror("No se pudo guardar", str(exc), parent=window)
             return
@@ -324,6 +337,7 @@ def show_gui_menu(master=None, on_saved=None):
 
         selected_config.update(p)
         selected_config["_profile_name"] = name
+        selected_config["_show_guide"] = master is None
         if master is None:
             window.quit()
         window.destroy()
@@ -352,7 +366,7 @@ def startup_config():
         preferred = next((name for name,p in profiles.items() if p.get("startup_default")), None)
         preferred = preferred or next((name for name in profiles if name == "Por Defecto"), None)
         preferred = preferred or next((name for name in profiles if name.casefold() == "octavio"), None)
-        if preferred is not None:
+        if preferred is not None and profiles[preferred].get("setup_complete", False):
             return {**normalize_profile(profiles[preferred]), "_profile_name": preferred}
     return show_gui_menu()
 
@@ -413,7 +427,23 @@ FACE_POINT = CONFIG["face_point"]
 SOUND_ENABLED = bool(CONFIG.get("sound_enabled", True))
 ACTIVE_PROFILE = CONFIG["_profile_name"]
 live_settings_window = None
-ui_commands = queue.SimpleQueue()
+ui_commands = queue.Queue(maxsize=64)
+
+
+def queue_hotkey(key):
+    if key not in tuple(getattr(keyboard.Key,f"f{i}") for i in range(1,13))+(keyboard.Key.esc,) and getattr(key,"char","") not in ("r","R","k","K"):
+        return
+    try:
+        ui_commands.put_nowait(key)
+    except queue.Full:
+        try:
+            ui_commands.get_nowait()
+        except queue.Empty:
+            pass
+        try:
+            ui_commands.put_nowait(key)
+        except queue.Full:
+            pass
 action_audio = None
 WINDOW_NAME = "Face Mouse"
 WINDOW_FULLSCREEN = False
@@ -814,7 +844,7 @@ office_mode = False
 
 def pointer_over_controls():
     x, y = pyautogui.position()
-    for window in (floating_actions_root, floating_keyboard_root, live_settings_window, confirmation_window, main_menu_window):
+    for window in (floating_actions_root, floating_keyboard_root, live_settings_window, confirmation_window, main_menu_window, alignment_window):
         if window is not None and window.winfo_exists() and window.winfo_viewable():
             if window.winfo_rootx() <= x < window.winfo_rootx()+window.winfo_width() and window.winfo_rooty() <= y < window.winfo_rooty()+window.winfo_height():
                 return True
@@ -1179,6 +1209,7 @@ def create_quick_actions_bubble():
             ("Teclado", toggle_floating_keyboard),
             ("Sensibilidades", open_live_settings),
             ("Menú principal", open_main_menu),
+            ("Posición cámara", open_alignment_guide),
             ("Calib", reset_wink_calibration),
             ("Centro", center_mouse),
             ("Pausa", lambda: confirm_control("pause")),
@@ -1630,6 +1661,7 @@ def open_camera(index):
 
     if not cap.isOpened():
         print(f"[ERROR] No se pudo abrir cámara {index}")
+        cap.release()
         return None
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
@@ -1922,7 +1954,7 @@ def save_runtime_settings(values):
         profiles = {}
     settings = {k: v for k, v in validated(values).items() if not k.startswith("_")}
     profile = {**CONFIG, **profiles.get(ACTIVE_PROFILE, {}), **settings}
-    profile.pop("_profile_name", None)
+    profile = {k:v for k,v in profile.items() if not k.startswith("_")}
     profile["sens_x"] = SENS_LEVELS[CURRENT_SENS_X_INDEX]
     profile["sens_y"] = SENS_LEVELS[CURRENT_SENS_Y_INDEX]
     profile["sensitivity"] = profile["sens_x"]
@@ -1939,6 +1971,57 @@ def save_runtime_settings(values):
 
 
 main_menu_window = None
+alignment_window = None
+
+
+def open_alignment_guide():
+    global alignment_window
+    if alignment_window is not None and alignment_window.winfo_exists():
+        alignment_window.deiconify()
+        alignment_window.lift()
+    else:
+        alignment_window = AlignmentGuide(floating_keyboard_root, reset_wink_calibration)
+
+
+def update_alignment_guide(frame, landmarks):
+    if alignment_window is not None and alignment_window.winfo_exists():
+        alignment_window.update_frame(frame,landmarks)
+
+
+def save_menu_profiles(profiles, config):
+    """Validate the new device before persisting or releasing the working camera."""
+    global cap, CAMERA_INDEX, last_preview_frame, current_gray_frame
+    index = int(config["camera"])
+    candidate = None
+    try:
+        if index != CAMERA_INDEX:
+            raw = open_camera(index)
+            if raw is None:
+                raise ValueError("No se pudo abrir esa cámara. La cámara anterior sigue activa.")
+            candidate = LatestFrameCapture(raw)
+            deadline = time.monotonic() + 4.0
+            ready = False
+            while time.monotonic() < deadline:
+                ok, frame = candidate.read()
+                if ok and frame is not None and frame.size:
+                    ready = True
+                    break
+            if not ready:
+                raise ValueError("Esa cámara no entrega imagen. La cámara anterior sigue activa.")
+        save_profiles(profiles)
+    except Exception:
+        if candidate is not None:
+            candidate.release()
+        raise
+    if candidate is not None:
+        stop_drag()
+        previous = cap
+        cap = candidate
+        CAMERA_INDEX = index
+        last_preview_frame = current_gray_frame = None
+        reset_tracking()
+        reset_wink_calibration()
+        previous.release()
 
 
 def apply_menu_profile(config):
@@ -1963,7 +2046,7 @@ def open_main_menu():
         live_settings_window.lift()
         live_settings_window.message.configure(text="Guardá o cerrá estos ajustes antes de abrir Menú principal.")
         return
-    main_menu_window = show_gui_menu(floating_keyboard_root, apply_menu_profile)
+    main_menu_window = show_gui_menu(floating_keyboard_root, apply_menu_profile, save_menu_profiles)
 
 
 def open_live_settings():
@@ -1987,6 +2070,7 @@ def open_live_settings():
 cap = open_camera(CAMERA_INDEX)
 if cap is None:
     raise SystemExit("No se pudo iniciar la cámara.")
+cap = LatestFrameCapture(cap)
 
 mp_face_mesh = mp.solutions.face_mesh
 face_mesh = mp_face_mesh.FaceMesh(
@@ -2000,8 +2084,10 @@ face_mesh = mp_face_mesh.FaceMesh(
 action_audio = ActionAudio()
 create_floating_keyboard()
 create_quick_actions_bubble()
+if CONFIG.get("_show_guide"):
+    open_alignment_guide()
 
-hotkey_listener = keyboard.Listener(on_press=ui_commands.put)
+hotkey_listener = keyboard.Listener(on_press=queue_hotkey)
 hotkey_listener.start()
 
 print("[TRACK] Selección automática:", FACE_POINT)
@@ -2051,6 +2137,8 @@ try:
 
         ok, frame = cap.read()
         if not ok:
+            if alignment_window is not None and alignment_window.winfo_exists():
+                alignment_window.unavailable()
             if not SELECTING_POINT:
                 stop_drag()
                 reset_tracking()
@@ -2067,6 +2155,7 @@ try:
         rgb.flags.writeable = False
         res = face_mesh.process(rgb)  # Raw camera data, never overlays or text.
         if not res.multi_face_landmarks:
+            update_alignment_guide(frame,None)
             brow_detector = None
             if not SELECTING_POINT:
                 stop_drag()
@@ -2079,6 +2168,7 @@ try:
             continue
 
         lm = res.multi_face_landmarks[0].landmark
+        update_alignment_guide(frame,lm)
         face_anchor = smooth_face_anchor(face_anchor_px(lm, frame.shape[1], frame.shape[0]))
         selecting = SELECTING_POINT
         if selecting:

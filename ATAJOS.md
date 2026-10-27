@@ -14,6 +14,17 @@ existente sigue ajustándose desde Sensibilidades; no se cambiaron los perfiles.
 
 ## Inicio directo y configuración
 
+En el primer inicio se muestra el menú aunque venga incluido Por Defecto. Al
+guardar y comenzar queda marcada la configuración como completada; los siguientes
+inicios usan ese perfil. Los perfiles de versiones anteriores sin esa marca
+mostrarán el menú una vez para confirmarlos.
+
+La burbuja incluye Posición cámara: muestra un óvalo y los ojos sobre la imagen
+actual, sin grabarla. Verde significa cara centrada y ojos visibles. La cámara
+debe estar cerca de la altura de los ojos; si está baja, elevála y usá Recalibrar.
+La guía se abre después de la configuración inicial y se puede cerrar para
+reducir el trabajo de dibujo.
+
 La configuración de Octavio ahora se llama Por Defecto. Se conserva como base:
 guardar cambios desde esa base crea Personalizado 1, Personalizado 2, etc.
 Los perfiles personalizados se pueden actualizar normalmente. También podés
