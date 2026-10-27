@@ -1,5 +1,7 @@
 ﻿#define MyAppName "MouthClick"
-#define MyAppVersion "1.3.0"
+#ifndef MyAppVersion
+  #define MyAppVersion "1.4.0"
+#endif
 #define MyAppPublisher "Fundación Teletón"
 #define MyAppExeName "MouthClick.exe"
 #ifndef AppSource
